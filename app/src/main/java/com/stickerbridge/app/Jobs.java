@@ -28,7 +28,7 @@ public final class Jobs {
     public static void toast(Context c,String message){State.showHint(message);if(BridgeAccessibility.live==null||!State.prefs(c).getBoolean("enabled",true))State.MAIN.post(()->Toast.makeText(c,message,Toast.LENGTH_LONG).show());}
     private static boolean begin(Context c,Diagnostics.Operation operation){if(State.beginTask(operation))return true;toast(c,"正在处理，请等这一张保存完成");return false;}
     public static void pick(Context context,Bitmap screen,int x,int y,Rect bounds,String scope,long selectionId,String targetId,String targetDescription,int targetRank,boolean animationExpected){
-        Context c=context.getApplicationContext();Diagnostics.phase(Diagnostics.Phase.SOURCE_LOOKUP);State.update(c,"识别原表情","正在取得这张图片的原文件，完成后直接存到相册。");State.advanceProgress(5);
+        Context c=context.getApplicationContext();Diagnostics.phase(Diagnostics.Phase.SOURCE_LOOKUP);State.lookingForOriginal=true;State.update(c,"正在查找原件","找到可用原件后才开始转换。");State.advanceProgress(5);
         State.IO.execute(()->{File source=null;try{
             long lookupStarted=android.os.SystemClock.elapsedRealtime();
             if(targetRank<0||targetRank>=99)throw new IllegalArgumentException("当前选区不是图片或视频，请重新选择目标");
@@ -71,7 +71,14 @@ public final class Jobs {
                 JSONObject report=new JSONObject().put("selectionId",selectionId).put("selectedBounds",crop.flattenToString()).put("scope",scope).put("fastPath",fast).put("knownSourcePool",known.length()).put("knownSourceResolved",cached).put("animationPool",animationPool).put("lookupBudgetMs",LOOKUP_BUDGET_MS).put("lookupElapsedMs",android.os.SystemClock.elapsedRealtime()-lookupStarted);JSONArray scores=new JSONArray();for(int i=0;i<Math.min(3,hits.size());i++){JSONObject m=new JSONObject(hits.get(i).media.toString());m.remove("thumbs");m.put("sourceScore",hits.get(i).score);scores.put(m);}report.put("sources",scores);
                 Files.write(new File(c.getFilesDir(),"source-resolution.json").toPath(),report.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
-            if(!confident(hits,.105,.02))throw new JobFailure(motionRequired?Diagnostics.Failure.MOTION_UNAVAILABLE:Diagnostics.Failure.NO_ORIGINAL,motionRequired?"这张动态图的动画原件暂不可读，未保存为静态封面。可通过系统分享或导入完整原文件。":"还没取得这张图片或视频的可靠原文件，未保存。请点开它，让原文件加载完整后再选；也可通过系统分享原文件导入。");
+            if(!confident(hits,.105,.02)){
+                if(android.os.SystemClock.elapsedRealtime()>=deadline)throw new JobFailure(Diagnostics.Failure.LOOKUP_TIMEOUT,
+                        "查找原件超时，未保存。若抖音能保存或分享完整文件，可导入表情直达。");
+                throw new JobFailure(motionRequired?Diagnostics.Failure.MOTION_UNAVAILABLE:Diagnostics.Failure.NO_ORIGINAL,
+                        motionRequired?"没有找到这张动图的完整原件，未保存。若抖音能保存或分享文件，可导入表情直达。"
+                                :"没有找到与选区匹配的原件，未保存。若抖音能保存或分享文件，可导入表情直达。");
+            }
+            State.lookingForOriginal=false;
             State.advanceProgress(32);
             Matcher.Hit selected=hits.get(0);JSONObject selection=new JSONObject().put("selectionId",selectionId).put("selectedBounds",crop.flattenToString()).put("sourceScore",selected.score).put("lookupMs",android.os.SystemClock.elapsedRealtime()-lookupStarted).put("targetRank",targetRank).put("animationExpected",motionRequired);
             Diagnostics.phase(Diagnostics.Phase.INPUT_READ);if(!screen.isRecycled())screen.recycle();long readStarted=android.os.SystemClock.elapsedRealtime();source=client.fetch(c,selected.media.getString("path"));String sourceHash=sha256(source);selection.put("sourceReadMs",android.os.SystemClock.elapsedRealtime()-readStarted);
@@ -108,6 +115,7 @@ public final class Jobs {
         return changed?Matcher.find(screen,x,y,bounds,c.getResources().getDisplayMetrics().density,items):hits;
     }
     private static void convertSelectionFrame(Context c,Bitmap screen,Rect crop,long id,int targetRank)throws Exception{
+        State.lookingForOriginal=false;
         Diagnostics.phase(Diagnostics.Phase.CONVERT);
         State.update(c,"保存静态截图","正在将选框中的单帧画面保存为 PNG。");
         File source=File.createTempFile("selected_frame_",".png",c.getCacheDir());

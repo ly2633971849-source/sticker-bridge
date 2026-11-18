@@ -463,11 +463,11 @@ public final class MainActivity extends Activity {
                 && (State.jobId != 0 || !"准备好保存到相册".equals(State.stage)))
                 || (State.savedResult && !hasLast);
         taskCard.setVisibility(hasMessage ? View.VISIBLE : View.GONE);
-        setText(status, State.stage + ((busy || State.savedResult) && State.progress >= 0
+        setText(status, State.stage + ((busy || State.savedResult) && State.progress >= 0 && !State.lookingForOriginal
                 ? "  " + State.progress + "%" : ""));
         setText(detail, State.detail);
         progress.setVisibility(busy ? View.VISIBLE : View.GONE);
-        progress.setIndeterminate(State.progress < 0);
+        progress.setIndeterminate(State.progress < 0 || State.lookingForOriginal);
         if (State.progress >= 0) progress.setProgress(State.progress);
 
         lastCard.setVisibility(hasLast ? View.VISIBLE : View.GONE);

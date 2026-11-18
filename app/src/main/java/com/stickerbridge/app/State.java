@@ -20,6 +20,7 @@ public final class State {
     public static volatile boolean busy;
     public static volatile int progress=-1;
     public static volatile boolean savedResult;
+    public static volatile boolean lookingForOriginal;
     private static JSONArray progressHistory=new JSONArray();
     public static volatile long jobId;
     public static volatile long jobStartedElapsed,noticeUntil,hintUntil;
@@ -39,7 +40,7 @@ public final class State {
     }
     private static void recordProgress(){try{if(progressHistory.length()<128)progressHistory.put(new JSONObject().put("progress",progress).put("stage",stage).put("elapsedMs",Math.max(0,android.os.SystemClock.elapsedRealtime()-jobStartedElapsed)));}catch(Exception ignored){}}
     public static synchronized JSONArray progressTrace(){try{return new JSONArray(progressHistory.toString());}catch(Exception ignored){return new JSONArray();}}
-    public static synchronized boolean beginTask(Diagnostics.Operation operation){if(busy)return false;Diagnostics.begin(operation);busy=true;progress=0;savedResult=false;progressHistory=new JSONArray();jobId=Math.max(System.currentTimeMillis(),jobId+1);jobStartedElapsed=android.os.SystemClock.elapsedRealtime();noticeUntil=hintUntil=0;hint="";stage="准备读取表情";detail="正在取得选中的原表情，请稍候。";recordProgress();changed();return true;}
+    public static synchronized boolean beginTask(Diagnostics.Operation operation){if(busy)return false;Diagnostics.begin(operation);busy=true;progress=0;savedResult=false;lookingForOriginal=false;progressHistory=new JSONArray();jobId=Math.max(System.currentTimeMillis(),jobId+1);jobStartedElapsed=android.os.SystemClock.elapsedRealtime();noticeUntil=hintUntil=0;hint="";stage="准备读取表情";detail="正在取得选中的原表情，请稍候。";recordProgress();changed();return true;}
     /** One job owns one monotonic workflow counter; only finishSaved may publish 100. */
     public static synchronized void advanceProgress(int value){if(!busy)return;int next=Math.max(progress,Math.max(0,Math.min(99,value)));if(next==progress)return;progress=next;recordProgress();changed();}
     public static void phaseProgress(int from,int to,long completed,long total){advanceProgress(from+(int)((to-from)*Math.min(Math.max(0,completed),Math.max(1,total))/Math.max(1,total)));}
@@ -62,7 +63,7 @@ public final class State {
     public static synchronized void finish(Context c,String next,String message){Diagnostics.end(Diagnostics.Result.COMPLETED,Diagnostics.Failure.NONE);finishTask(c,next,message,false);}
     public static synchronized void finishFailure(Context c,String next,String message,Diagnostics.Failure failure){Diagnostics.end(Diagnostics.Result.FAILED,failure);finishTask(c,next,message,false);}
     public static synchronized void finishSaved(Context c,String message){Diagnostics.end(Diagnostics.Result.SAVED,Diagnostics.Failure.NONE);finishTask(c,"已保存到相册",message,true);}
-    private static void finishTask(Context c,String next,String message,boolean saved){savedResult=saved;stage=next;if(saved){progress=100;recordProgress();}busy=false;noticeUntil=android.os.SystemClock.elapsedRealtime()+3000;hintUntil=0;hint="";if(selection.optBoolean("pending")&&selection.optLong("selectionId")==jobId)cancelSelection(jobId);update(c,next,message);}
+    private static void finishTask(Context c,String next,String message,boolean saved){savedResult=saved;lookingForOriginal=false;stage=next;if(saved){progress=100;recordProgress();}busy=false;noticeUntil=android.os.SystemClock.elapsedRealtime()+3000;hintUntil=0;hint="";if(selection.optBoolean("pending")&&selection.optLong("selectionId")==jobId)cancelSelection(jobId);update(c,next,message);}
     public static synchronized JSONObject status(Context c){
         restore(c);JSONObject s=new JSONObject();
         try{s.put("mode","selection_to_album").put("manualMatching",false).put("backgroundSourceIdentification",true).put("automaticQq",false).put("accessibility",BridgeAccessibility.live!=null).put("enabled",prefs(c).getBoolean("enabled",true)).put("stage",stage).put("detail",detail).put("busy",busy).put("progress",progress).put("jobId",jobId).put("galleryCount",gallery.length()).put("galleryMore",galleryMore).put("last",last).put("selection",selection);if(BridgeAccessibility.live!=null)s.put("picker",BridgeAccessibility.live.selectionStatus());}catch(Exception ignored){}
