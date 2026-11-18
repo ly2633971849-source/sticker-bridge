@@ -31,11 +31,9 @@ public final class MediaFiles {
             if ((b[0]&255)==0x1a&&(b[1]&255)==0x45&&(b[2]&255)==0xdf&&(b[3]&255)==0xa3) return "video";
             if (b[0]=='B'&&b[1]=='M') return "bmp";
             if (b[4] == 'f' && b[5] == 't' && b[6] == 'y' && b[7] == 'p') {
-                String brand = new String(b, 8, 4, java.nio.charset.StandardCharsets.US_ASCII);
-                if (brand.equals("heic") || brand.equals("heix") || brand.equals("mif1") || brand.equals("avif") || brand.equals("vvic")) return "heif";
-                // Compatible mif1 identifies an image container; msf1 is a sequence.
-                for(int i=16;i+4<=n;i+=4)if(b[i]=='m'&&b[i+1]=='i'&&b[i+2]=='f'&&b[i+3]=='1')return "heif";
-                return "video";
+                IsoMediaBrands.Kind brands=IsoMediaBrands.inspect(f);
+                if(brands==IsoMediaBrands.Kind.STILL)return "heif";
+                return brands==IsoMediaBrands.Kind.UNRECOGNIZED?"unknown":"video";
             }
         } catch (Exception ignored) { }
         return "unknown";
@@ -68,9 +66,7 @@ public final class MediaFiles {
         }else reader.setDataSource(file.getAbsolutePath());
     }
     public static boolean imageSequence(File file){
-        try(FileInputStream in=new FileInputStream(file)){byte[] b=new byte[64];int n=in.read(b);if(n<16)return false;
-            for(int i=8;i+4<=n;i+=4){String brand=new String(b,i,4,java.nio.charset.StandardCharsets.US_ASCII);if(brand.equals("msf1")||brand.equals("hevs")||brand.equals("hevm"))return true;}
-        }catch(Exception ignored){}return false;
+        return IsoMediaBrands.inspect(file)==IsoMediaBrands.Kind.SEQUENCE;
     }
     public static boolean animationContainer(File f,String kind){
         try{
@@ -98,14 +94,17 @@ public final class MediaFiles {
                 w = integer(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH), 0); h = integer(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT), 0);
                 frames = integer(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT), 0); duration = integer(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION), 0); animated = frames > 1 || (frames<1&&duration>0);
                 int rotation=integer(r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION),0);if(rotation==90||rotation==270){int swap=w;w=h;h=swap;}
-                m.put("rotation",rotation).put("imageSequence",imageSequence(f));
+                boolean sequence=kind.equals("video")&&imageSequence(f);
+                m.put("rotation",rotation).put("imageSequence",sequence);
                 if(w<=0||h<=0)throw new IllegalArgumentException("未读取到视频画面，请让原文件加载完整后重试");
                 if (w > 4096 || h > 4096) throw new IllegalArgumentException("视频尺寸超过 4096 像素，暂时无法转换");
                 if(duration>60000)throw new IllegalArgumentException("当前支持 60 秒内的动态表情，这张为 "+Math.round(duration/1000f)+" 秒");
                 if (thumbnails) {
                     int[] indices = new int[]{0};
                     for (int index : indices) {
-                        Bitmap frame=imageSequence(f)&&frames>0?r.getFrameAtIndex(index):r.getScaledFrameAtTime(0,MediaMetadataRetriever.OPTION_CLOSEST,96,96);
+                        Bitmap frame=null;
+                        if(sequence&&frames>0)try{frame=r.getFrameAtIndex(index);}catch(RuntimeException unavailable){}
+                        if(frame==null)frame=r.getScaledFrameAtTime(0,MediaMetadataRetriever.OPTION_CLOSEST,96,96);
                         if (frame != null) { thumbs.put(thumb(frame)); frame.recycle(); }
                     }
                 }

@@ -18,6 +18,7 @@ import org.json.JSONObject;
 /** Indexes originals for background resolution and optional manual file selection. */
 public final class SourceClient {
     public static final int PORT=47381;
+    private static final String INDEX_DIRECTORY="media_index_v4";
     private final String token;
     public SourceClient(Context c){token=State.token(c);}
     private static int timeout(long deadline,int maximum)throws SocketTimeoutException{
@@ -52,11 +53,11 @@ public final class SourceClient {
     private static String hash(byte[] data)throws Exception{return hex(java.security.MessageDigest.getInstance("SHA-256").digest(data));}
     private static String identity(JSONObject media)throws Exception{return media.getString("path")+":"+media.optLong("modified")+":"+media.optLong("size");}
     private File metadataFile(Context c,JSONObject media)throws Exception{
-        File dir=new File(c.getCacheDir(),"media_index_v3");return metadataFile(dir,identity(media));
+        File dir=new File(c.getCacheDir(),INDEX_DIRECTORY);return metadataFile(dir,identity(media));
     }
     private File metadataFile(File dir,String key)throws Exception{if(!dir.isDirectory())dir.mkdirs();return new File(dir,hash(key.getBytes(StandardCharsets.UTF_8))+".json");}
     public JSONArray known(Context c,String scope,float aspect)throws Exception{
-        File dir=new File(c.getCacheDir(),"media_index_v3");File[] files=dir.listFiles((d,name)->name.endsWith(".json"));JSONArray result=new JSONArray();if(files==null)return result;
+        File dir=new File(c.getCacheDir(),INDEX_DIRECTORY);File[] files=dir.listFiles((d,name)->name.endsWith(".json"));JSONArray result=new JSONArray();if(files==null)return result;
         java.util.HashMap<File,Long> times=new java.util.HashMap<>();for(File file:files)times.put(file,file.lastModified());java.util.Arrays.sort(files,(a,b)->Long.compare(times.get(b),times.get(a)));
         java.util.LinkedHashMap<String,JSONObject> paths=new java.util.LinkedHashMap<>();String last=State.last.optString("source");long retainedBytes=0;
         long readBytes=0,started=android.os.SystemClock.elapsedRealtime();
@@ -79,7 +80,7 @@ public final class SourceClient {
     }
     public void remember(Context c,JSONObject media){try{JSONObject item=new JSONObject(media.toString()).put("usedAt",System.currentTimeMillis());java.nio.file.Files.write(metadataFile(c,item).toPath(),item.toString().getBytes(StandardCharsets.UTF_8));}catch(Exception ignored){}}
     public static boolean needsRefine(JSONObject media){return media.optBoolean("animated")&&media.optInt("fingerprintVersion")<2;}
-    public void forget(Context c,String path){File[] files=new File(c.getCacheDir(),"media_index_v3").listFiles((dir,name)->name.endsWith(".json"));if(files==null)return;for(File file:files)try{if(file.length()<2000000&&new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8)).optString("path").equals(path))file.delete();}catch(Exception ignored){}}
+    public void forget(Context c,String path){File[] files=new File(c.getCacheDir(),INDEX_DIRECTORY).listFiles((dir,name)->name.endsWith(".json"));if(files==null)return;for(File file:files)try{if(file.length()<2000000&&new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8)).optString("path").equals(path))file.delete();}catch(Exception ignored){}}
     public interface IndexObserver { boolean sufficient(JSONArray items)throws Exception; }
     public JSONArray sourceIndex(Context c,int limit,String scope,float aspect,long deadline,int from,int to,boolean animatedOnly,Set<String> scanned)throws Exception{
         return sourceIndex(c,limit,scope,aspect,deadline,from,to,animatedOnly,scanned,null);
@@ -88,7 +89,7 @@ public final class SourceClient {
         JSONArray raw,result=new JSONArray();Set<String> seen=new HashSet<>();
         try{raw=call(new JSONObject().put("op","index").put("limit",limit).put("scope",scope).put("animatedOnly",animatedOnly),deadline).getJSONArray("items");}
         catch(SocketTimeoutException error){if(SystemClock.elapsedRealtime()>=deadline)return result;throw error;}
-        File dir=new File(c.getCacheDir(),"media_index_v3");
+        File dir=new File(c.getCacheDir(),INDEX_DIRECTORY);
         for(int i=0;i<raw.length()&&SystemClock.elapsedRealtime()<deadline;i++){
             if(i%12==0)State.phaseProgress(from,to,i,raw.length());
             JSONObject entry=raw.getJSONObject(i);String key=identity(entry);if(scanned.contains(key))continue;
@@ -118,7 +119,7 @@ public final class SourceClient {
         JSONObject animatedIndex=call(new JSONObject().put("op","index").put("limit",limit).put("animatedOnly",true));
         JSONArray raw=new JSONArray(),items=new JSONArray();java.util.HashSet<String> paths=new java.util.HashSet<>(),seen=new java.util.HashSet<>();
         for(JSONArray group:new JSONArray[]{animatedIndex.getJSONArray("items"),index.getJSONArray("items")})for(int i=0;i<group.length();i++){JSONObject entry=group.getJSONObject(i);if(paths.add(entry.getString("path")))raw.put(entry);}
-        File cache=new File(c.getCacheDir(),"media_index_v3");cache.mkdirs();
+        File cache=new File(c.getCacheDir(),INDEX_DIRECTORY);cache.mkdirs();
         for(int i=0;i<raw.length();i++){
             if(i%6==0)State.phaseProgress(0,90,i,raw.length());
             JSONObject entry=raw.getJSONObject(i);String path=entry.getString("path"),key=path+":"+entry.optLong("modified")+":"+entry.optLong("size");

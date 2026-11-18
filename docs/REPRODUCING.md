@@ -21,6 +21,13 @@ adb -s SERIAL push repro-motion.mp4 /sdcard/Download/
 python tests/verify_video_import_android.py --device SERIAL --source repro-motion.mp4 --name synthetic-motion
 ```
 
+测试 AVIF 动画时，先用带 libaom 的 FFmpeg 生成两秒样本。用系统文件应用分享或导入该文件，在支持解码该 AV1 文件的设备上应得到 24 帧 GIF。测试脚本可用 `--mime image/avif` 指定输入类型。同一容器可能同时标记静图和图像序列，主机判型测试用 `python tests/verify_media_brands.py`，无需 Android SDK。
+
+```sh
+ffmpeg -f lavfi -i testsrc2=size=160x144:rate=12 -t 2 -an -c:v libaom-av1 -cpu-used 6 -pix_fmt yuv420p repro-sequence.avif
+python tests/verify_video_import_android.py --device SERIAL --source repro-sequence.avif --mime image/avif --name synthetic-sequence
+```
+
 针对「实况只有封面」的回归，用脚本从零生成一张声明包含动画、实际上没有视频片段的 JPEG。预期显示动画缺失，且相册没有新增静态封面：
 
 ```sh
