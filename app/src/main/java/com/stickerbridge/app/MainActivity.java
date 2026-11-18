@@ -30,6 +30,8 @@ import org.json.JSONObject;
 
 public final class MainActivity extends Activity {
     private static final int PICK_FILE = 7;
+    private static final int PICK_CROP_VIDEO = 8;
+    private static final int EDIT_CROP_VIDEO = 9;
     private static final java.util.concurrent.Executor PREVIEW_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
     private static final int BG = 0xff111816, CARD = 0xff1b2722, FG = 0xffeff7f2;
     private static final int MUTED = 0xffa7bbb0, ACCENT = 0xff8cf0b8, NOTICE = 0xffebcf91;
@@ -40,11 +42,13 @@ public final class MainActivity extends Activity {
     private ImageView preview;
     private boolean resumed, helper, helperChecked, checkingConnection;
     private String renderedLast = "";
+    private Uri cropSource;
     private AnimatedImageDrawable animation;
     private final Runnable stateListener = this::refresh;
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        if (saved != null) cropSource = saved.getParcelable("cropSource");
         State.restore(this);
         getWindow().setDecorFitsSystemWindows(false);
         getWindow().setStatusBarColor(BG);
@@ -77,6 +81,11 @@ public final class MainActivity extends Activity {
         if (animation != null) animation.stop();
         if (State.listener == stateListener) State.listener = null;
         super.onDestroy();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        out.putParcelable("cropSource", cropSource);
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -214,10 +223,11 @@ public final class MainActivity extends Activity {
         if (BridgeAccessibility.live != null && State.prefs(this).getBoolean("enabled", true))
             menu.add(0, 2, 1, "隐藏悬浮按钮");
         menu.add(1, 3, 2, "导入图片或视频");
-        menu.add(2, 4, 3, "无障碍设置");
-        menu.add(2, 6, 4, "检查更新");
-        menu.add(2, 7, 5, "复制诊断信息");
-        menu.add(2, 5, 6, "使用帮助");
+        menu.add(1, 8, 3, "从视频裁剪表情");
+        menu.add(2, 4, 4, "无障碍设置");
+        menu.add(2, 6, 5, "检查更新");
+        menu.add(2, 7, 6, "复制诊断信息");
+        menu.add(2, 5, 7, "使用帮助");
         menu.setGroupDividerEnabled(true);
         popup.setOnMenuItemClickListener(item -> {
             if (!canAct()) return true;
@@ -234,6 +244,7 @@ public final class MainActivity extends Activity {
                 case 5: showHelp(); break;
                 case 6: AppUpdates.show(this); break;
                 case 7: showDiagnostics(); break;
+                case 8: pickCropVideo(); break;
                 default: return false;
             }
             return true;
@@ -427,8 +438,36 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void pickCropVideo() {
+        try {
+            startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                    .addCategory(Intent.CATEGORY_OPENABLE).setType("video/*"), PICK_CROP_VIDEO);
+        } catch (android.content.ActivityNotFoundException error) {
+            Jobs.toast(this, "这台手机没有可用的文件选择器");
+        }
+    }
+
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == EDIT_CROP_VIDEO) {
+            Uri source = cropSource;
+            cropSource = null;
+            if (result == RESULT_OK && data != null && source != null) {
+                float[] crop = data.getFloatArrayExtra(CropVideoActivity.EXTRA_CROP);
+                if (crop != null && crop.length == 4) Jobs.convertCroppedVideo(this, source,
+                        new android.graphics.RectF(crop[0], crop[1], crop[2], crop[3]));
+            }
+            return;
+        }
+        if (request == PICK_CROP_VIDEO && result == RESULT_OK && data != null && !State.busy) {
+            Uri source = data.getData();
+            if (source != null && "content".equals(source.getScheme())) {
+                cropSource = source;
+                startActivityForResult(new Intent(Intent.ACTION_VIEW, source, this, CropVideoActivity.class)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), EDIT_CROP_VIDEO);
+            }
+            return;
+        }
         if (request == PICK_FILE && result == RESULT_OK && data != null) {
             Uri uri = data.getData();
             if (uri != null) Jobs.convertShared(this, uri);

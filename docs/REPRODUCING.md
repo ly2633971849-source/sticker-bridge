@@ -30,12 +30,23 @@ python tests/verify_video_import_android.py --device SERIAL --source repro-incom
 
 如果设备的媒体扫描接口不立即登记新文件，可先手动用系统文件选择器完成验证。自动测试会在本机 `build/video-import/` 写入日志和产物，只整理需要公开的结果字段。
 
+单独复现视频裁剪时，可以用红色背景包围一小块运动画面。先把应用界面设为中文，安装测试 APK，然后在测试设备运行：
+
+```sh
+ffmpeg -f lavfi -i color=c=red:size=480x360:rate=15 -f lavfi -i testsrc2=size=160x120:rate=15 -filter_complex "[0:v][1:v]overlay=160:120" -t 2 -an -c:v libx264 -pix_fmt yuv420p sticker-crop-qa.mp4
+adb -s SERIAL push sticker-crop-qa.mp4 /sdcard/Download/
+python tests/verify_video_crop_android.py --device SERIAL --source sticker-crop-qa.mp4
+```
+
+脚本操作实际的系统选文件和裁剪界面，验证相册 GIF 的尺寸、帧数、时长及与 FFmpeg 参考裁剪的像素差。若文件未出现在选取器，先用测试设备的文件应用打开下载目录。旋转测试可用 `ffmpeg -display_rotation:v:0 90 -i sticker-crop-qa.mp4 -c copy sticker-rotate-qa.mp4` 生成旋转副本；用 `ffprobe` 确认旋转元数据存在，再传入 `--source sticker-rotate-qa.mp4 --file-name sticker-rotate-qa.mp4 --rotated`。
+
 ## 按改动选择验证
 
 | 改动范围 | 复现步骤和判据 |
 | --- | --- |
 | 编码 | `python tests/verify_encoder.py`；独立解码验证尺寸、帧数、延时和透明像素。Android 上再核对同一素材的输出。 |
 | 导入、相册 | 仅选中合成 PNG / MP4，分别导入，核对输出格式、帧数和相册可见。空、损坏或超限输入应给出提示，不新增相册文件。 |
+| 视频裁剪 | 选中合成 MP4，在「更多 → 从视频裁剪表情」框住活动区域。核对相册 GIF 保留动画、时长和所选区域，再用同一输入走普通导入，确认普通导入仍保留完整画面。取消裁剪不应新增相册文件。 |
 | 抖音选框 | 记录安卓版本、品牌系统版本、抖音版本和所在页面。测试静态图片、明确标为动态但无可用原件、滑动后重新选择、切到后台后回来；检查选框是否贴合、保存提示是否消失。 |
 | 速度 | 记录冷启动后的第一次保存以及同一份素材的第二次保存，分别标明入口和是否可能复用缓存。对比时使用相同设备与素材，勿将抖音联网播放与应用转换混为同一测量。 |
 | 应用更新 | 使用独立 HTTPS 测试源和模拟器，测试同版提示、有效升级、取消、下载内容摘要不匹配。有效下载仍需系统安装确认；校验失败不可进入安装器。 |

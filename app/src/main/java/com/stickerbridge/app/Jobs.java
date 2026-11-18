@@ -6,6 +6,7 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.net.Uri;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
@@ -147,6 +148,13 @@ public final class Jobs {
         State.IO.execute(()->{File source=null;try{source=new SourceClient(c).fetch(c,path);convert(c,source,path,"douyin_recent",id);}catch(OutOfMemoryError e){lowMemory(c);}catch(Exception e){fail(c,e);}finally{if(source!=null)source.delete();}});return true;
     }
     public static boolean convertShared(Context context,Uri uri){
+        return convertShared(context,uri,null);
+    }
+    public static boolean convertCroppedVideo(Context context,Uri uri,RectF crop){
+        if(crop==null)throw new IllegalArgumentException("请先圈出要保留的画面");
+        return convertShared(context,uri,new RectF(crop));
+    }
+    private static boolean convertShared(Context context,Uri uri,RectF crop){
         Context c=context.getApplicationContext();if(!begin(c,Diagnostics.Operation.IMPORT))return false;final long id=State.jobId;
         Diagnostics.phase(Diagnostics.Phase.INPUT_READ);
         State.update(c,"读取原文件","正在接收图片或动图…");State.advanceProgress(5);
@@ -162,7 +170,7 @@ public final class Jobs {
                     while((n=in.read(block))!=-1){size+=n;if(size>MAX_BYTES)throw new IllegalArgumentException("原文件超过 32 MB，请选择较小的图片或短视频");out.write(block,0,n);}
                     if(size==0)throw new IllegalArgumentException("收到的是空文件，请重新选择原图片");
                 }
-                convert(c,source,name==null?"原图片":name,"shared_file",id);
+                convert(c,source,name==null?"原图片":name,crop==null?"shared_file":"cropped_video",id,null,null,null,crop);
             }catch(OutOfMemoryError e){lowMemory(c);}catch(Exception e){fail(c,e);}finally{source.delete();}
         });return true;
     }
@@ -177,12 +185,16 @@ public final class Jobs {
         convert(c,source,original,input,id,selection,null,null);
     }
     private static void convert(Context c,File source,String original,String input,long id,JSONObject selection,JSONObject verifiedMeta,String verifiedHash)throws Exception{
+        convert(c,source,original,input,id,selection,verifiedMeta,verifiedHash,null);
+    }
+    private static void convert(Context c,File source,String original,String input,long id,JSONObject selection,JSONObject verifiedMeta,String verifiedHash,RectF crop)throws Exception{
         Diagnostics.phase(Diagnostics.Phase.MEDIA_INSPECT);
-        long conversionStarted=android.os.SystemClock.elapsedRealtime(),decodeMs=0,encodeMs=0;String sourceHash=verifiedHash==null?sha256(source):verifiedHash;JSONObject cached=ConversionCache.get(c,sourceHash);
+        long conversionStarted=android.os.SystemClock.elapsedRealtime(),decodeMs=0,encodeMs=0;String sourceHash=verifiedHash==null?sha256(source):verifiedHash;JSONObject cached=crop==null?ConversionCache.get(c,sourceHash):null;
         JSONObject meta=verifiedMeta;
         // A previous PNG is not proof that the input was static: re-read its container metadata.
         if(meta==null&&cached!=null&&cached.optInt("frames")>1)meta=new JSONObject().put("kind",cached.getString("sourceKind")).put("frames",cached.optInt("sourceFrames")).put("duration",cached.optInt("sourceDuration")).put("width",cached.optInt("sourceWidth")).put("height",cached.optInt("sourceHeight")).put("animated",true);
         if(meta==null)meta=MediaFiles.describe(source,false);String kind=meta.getString("kind");
+        if(crop!=null&&(!kind.equals("video")||!meta.optBoolean("animated")))throw new IllegalArgumentException("请选一段有多个画面的视频");
         if(meta.optBoolean("motionUnavailable"))throw new JobFailure(Diagnostics.Failure.MOTION_UNAVAILABLE,"这份实况文件缺少动画片段，未保存为静态图片。请提供完整原文件。");
         if((kind.equals("video")||kind.equals("live_photo"))&&!meta.optBoolean("animated"))throw new IllegalArgumentException("这个视频的动画信息尚未读完整，未保存为静态图片。请重新导入完整原文件。");
         if(cached!=null&&cached.optInt("frames")<2&&meta.optBoolean("animated"))cached=null;
@@ -198,14 +210,15 @@ public final class Jobs {
             else if(input.equals("selection_frame")||kind.equals("gif")&&meta.optBoolean("animated")){long started=android.os.SystemClock.elapsedRealtime();Files.copy(source.toPath(),output.toPath());encodeMs=android.os.SystemClock.elapsedRealtime()-started;}
             else if((kind.equals("video")||kind.equals("live_photo"))&&meta.optBoolean("animated")){
                 int maximumFrames=meta.optInt("duration")>15000?240:90;
-                try(VideoFrames frames=new VideoFrames(source,320,maximumFrames);FileOutputStream bytes=new FileOutputStream(output);GifWriter gif=new GifWriter(bytes,frames.width,frames.height)){
+                try(VideoFrames frames=new VideoFrames(source,320,maximumFrames,crop);FileOutputStream bytes=new FileOutputStream(output);GifWriter gif=new GifWriter(bytes,frames.width,frames.height)){
                     int written=0;int[] pixels=new int[frames.width*frames.height];
+                    int[] first=crop==null?null:new int[pixels.length];boolean changed=false;
                     for(int i=0;i<frames.count;i++){
                         Bitmap frame=frames.next();if(frame==null)throw new IllegalArgumentException("原动画帧尚未读完，未保存");
-                        try{long started=android.os.SystemClock.elapsedRealtime();frame.getPixels(pixels,0,frame.getWidth(),0,0,frame.getWidth(),frame.getHeight());int end=Math.round((i+1)*(float)frames.duration/frames.count/10)*10;gif.frame(pixels,Math.max(20,end-written));written=end;encodeMs+=android.os.SystemClock.elapsedRealtime()-started;}
+                        try{long started=android.os.SystemClock.elapsedRealtime();frame.getPixels(pixels,0,frame.getWidth(),0,0,frame.getWidth(),frame.getHeight());if(first!=null){if(i==0)System.arraycopy(pixels,0,first,0,pixels.length);else if(!changed)changed=!java.util.Arrays.equals(first,pixels);}int end=Math.round((i+1)*(float)frames.duration/frames.count/10)*10;gif.frame(pixels,Math.max(20,end-written));written=end;encodeMs+=android.os.SystemClock.elapsedRealtime()-started;}
                         finally{frame.recycle();}
                         State.phaseProgress(35,90,i+1,frames.count);
-                    }decodeMs=frames.decodeMs;
+                    }if(first!=null&&!changed)throw new IllegalArgumentException("所选区域没有活动画面，请重新圈选");decodeMs=frames.decodeMs;
                 }
             }else if(kind.equals("webp")&&meta.optBoolean("animated")){
                 WebpAnimation animation=WebpAnimation.read(source);int maximumFrames=animation.duration>15000?240:90;float scale=Math.min(1f,320f/Math.max(animation.width,animation.height));
@@ -225,10 +238,10 @@ public final class Jobs {
             Diagnostics.phase(Diagnostics.Phase.ALBUM_WRITE);State.advanceProgress(92);State.update(c,"保存到相册","正在写入最近照片…");
             long albumStarted=android.os.SystemClock.elapsedRealtime();Uri uri=save(c,output,result.getString("mimeType"),id);saved=true;
             result.put("mediaUri",uri.toString()).put("album","Pictures/StickerBridge").put("savedAt",System.currentTimeMillis()).put("savedToAlbum",true);
-            result.put("albumWriteMs",android.os.SystemClock.elapsedRealtime()-albumStarted).put("totalMs",android.os.SystemClock.elapsedRealtime()-State.jobStartedElapsed);ConversionCache.remember(c,result);
+            result.put("albumWriteMs",android.os.SystemClock.elapsedRealtime()-albumStarted).put("totalMs",android.os.SystemClock.elapsedRealtime()-State.jobStartedElapsed);if(crop==null)ConversionCache.remember(c,result);
             State.last=result;if(selection!=null)State.selection=new JSONObject(result.toString()).put("pending",false);State.prefs(c).edit().putString("albumLast",result.toString()).commit();
             State.finishSaved(c,input.equals("selection_frame")?"静态截图已保存，在 QQ 收藏里从最近照片添加。":result.optInt("frames")>1?"动态 GIF 已保存，在 QQ 收藏里从最近照片添加。":"静态 PNG 已保存，在 QQ 收藏里从最近照片添加。");
-        }finally{if(!saved&&cached==null)output.delete();}
+        }finally{if(crop!=null||!saved&&cached==null)output.delete();}
     }
     private static Uri save(Context c,File file,String mime,long id)throws Exception{
         ContentValues values=new ContentValues();values.put(MediaStore.Images.Media.DISPLAY_NAME,"sticker_"+id+(mime.equals("image/gif")?".gif":".png"));values.put(MediaStore.Images.Media.MIME_TYPE,mime);values.put(MediaStore.Images.Media.RELATIVE_PATH,"Pictures/StickerBridge");values.put(MediaStore.Images.Media.IS_PENDING,1);
