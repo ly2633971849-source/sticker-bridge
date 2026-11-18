@@ -1,0 +1,4 @@
+<resources>
+    <string name="accessibility_description">在抖音里选取图片和表情。可以将选区当前画面保存为静态图片；取得原动图或视频时可转为 GIF。不录屏，不自动操作 QQ。悬浮框消失时可在应用首页恢复。</string>
+    <string name="app_update_manifest" translatable="false"></string>
+</resources>

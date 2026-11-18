@@ -1,0 +1,61 @@
+name: Bug 复现
+description: 记录一次其他人能重复的失败
+title: "[Bug]: "
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 表情直达版本
+      description: 发行版本号，或自编译时的提交 ID
+      placeholder: "例如：0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: 设备与系统版本
+      description: 写型号、Android 和品牌系统版本；不填序列号、账号或其他标识。
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 出错入口
+      options:
+        - 抖音内框选
+        - 首页导入图片或视频
+        - 系统分享文件
+        - 相册查看或 QQ 添加
+        - 检查或安装更新
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从打开应用开始写。若涉及抖音或 QQ，请填写其版本和页面；注明素材类型、尺寸、时长，以及问题复现几次。
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 应用诊断（可选）
+      description: 可从「更多 → 复制诊断信息」取得；先检查内容再粘贴，应用不会自行发送。
+      render: json
+  - type: textarea
+    id: result
+    attributes:
+      label: 期望和实际结果
+      description: 分别写出应发生什么、实际发生什么。可以附出错提示的原文。
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: 可公开的最小素材（可选）
+      description: 优先提供合成文件或生成命令。不要上传账号数据、完整日志、聊天截图、序列号、配对码或私有链接。

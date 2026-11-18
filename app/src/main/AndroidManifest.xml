@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.stickerbridge.app" android:versionCode="3" android:versionName="0.2.1">
+    <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <queries>
+        <package android:name="com.tencent.mobileqq" />
+        <package android:name="com.ss.android.ugc.aweme" />
+        <intent>
+            <action android:name="android.intent.action.INSTALL_PACKAGE" />
+            <data android:scheme="content" android:mimeType="application/vnd.android.package-archive" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.MANAGE_UNKNOWN_APP_SOURCES" />
+            <data android:scheme="package" />
+        </intent>
+    </queries>
+    <application android:label="表情直达" android:theme="@style/AppTheme" android:icon="@drawable/ic_app" android:allowBackup="false" android:debuggable="false" android:supportsRtl="true" android:usesCleartextTraffic="false">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+            <intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="image/*" /><data android:mimeType="video/*" /></intent-filter>
+        </activity>
+        <service android:name=".BridgeAccessibility" android:exported="true" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:label="表情直达 · 框选保存">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility" />
+        </service>
+        <provider android:name=".ControlProvider" android:authorities="com.stickerbridge.app.control" android:exported="true" />
+        <provider android:name=".UpdateFileProvider" android:authorities="com.stickerbridge.app.updatefile" android:exported="false" android:grantUriPermissions="true" />
+    </application>
+</manifest>

@@ -1,0 +1,12 @@
+build/
+outputs/
+evidence/
+deploy/
+*.jks
+*.keystore
+*.key
+*.pem
+*.apk
+*.idsig
+.env
+__pycache__/
