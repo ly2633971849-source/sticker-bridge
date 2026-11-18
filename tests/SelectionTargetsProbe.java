@@ -23,6 +23,19 @@ public final class SelectionTargetsProbe {
                 "A composer phrase inside a comment body is insufficient");
         require(!SelectionTargets.isCommentPrompt(BUTTON, null, "发条评论", null),
                 "A button label is not a composer");
+        String tab = "androidx.appcompat.app.ActionBar$Tab";
+        require(SelectionTargets.isSelectedCommentTab(tab, true, "评论 3796"), "Selected comment tab");
+        require(SelectionTargets.isSelectedCommentTab(tab, true, "评论 2.8万"), "Compact comment count");
+        require(!SelectionTargets.isSelectedCommentTab(tab, false, "评论 3796"), "Inactive tab");
+        require(!SelectionTargets.isSelectedCommentTab(BUTTON, true, "评论 3796"), "Feed counter button");
+        require(!SelectionTargets.isSelectedCommentTab(tab, true, "评论是这样的"), "Not an exact tab label");
+        require(SelectionTargets.isReplyLabel("回复") && SelectionTargets.isReplyLabel("展开68条回复"),
+                "Comment row markers");
+        require(!SelectionTargets.isReplyLabel("可以回复我吗"), "Unrelated message");
+        require(SelectionTargets.followsCommentTab(920, 922, 1080, 1080, 3f), "Observed panel geometry");
+        require(!SelectionTargets.followsCommentTab(920, 0, 1080, 1080, 3f), "Feed behind the panel");
+        require(!SelectionTargets.followsCommentTab(920, 922, 300, 1080, 3f), "Narrow tile");
+        require(!SelectionTargets.followsCommentTab(920, 1250, 1080, 1080, 3f), "Detached container");
         require(SelectionTargets.composeMediaLeaf(VIEW, null, null, 0, true, true),
                 "An anonymous Compose leaf can carry media within comment scope");
         require(!SelectionTargets.composeMediaLeaf(VIEW, null, null, 0, true, false),

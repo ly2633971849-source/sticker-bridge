@@ -4,9 +4,12 @@ import android.graphics.Rect;
 import android.view.accessibility.AccessibilityNodeInfo;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /** Bounds are always in physical screen coordinates, never overlay-local coordinates. */
 public final class SelectionTargets {
+    private static final Pattern COMMENT_TAB = Pattern.compile("评论(?:\\s*[0-9]+(?:[.,][0-9]+)?\\s*[万亿]?[+]?)?");
+    private static final Pattern EXPAND_REPLIES = Pattern.compile("展开\\s*[0-9]+\\s*条回复");
     public static final class Target {
         public final Rect bounds;
         public final Rect nodeBounds;
@@ -16,12 +19,16 @@ public final class SelectionTargets {
         Target(Rect b,Rect node,String id,String description,int rank){this.bounds=new Rect(b);this.nodeBounds=new Rect(node);this.id=id;this.description=description;this.rank=rank;this.animationExpected=description.contains("视频")||description.contains("动图")||description.contains("实况");}
     }
     public static List<Target> collect(AccessibilityNodeInfo root,float density,int screenWidth,int screenHeight){
-        boolean im=isIm(root),comments=hasCommentInput(root,new int[]{0});
         ArrayList<Target> out=new ArrayList<>();int[] visited={0};
         // A preview may expose the comment list behind it: inspect only its foreground subtree.
         List<AccessibilityNodeInfo> previews=new ArrayList<>();if(root!=null)previews.addAll(root.findAccessibilityNodeInfosByViewId("com.ss.android.ugc.aweme:id/x-3"));
         if(root!=null&&previews.isEmpty())for(AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText("评论图片详情页"))if(node.isVisibleToUser()&&String.valueOf(node.getContentDescription()).contains("图片详情页"))previews.add(node);
-        if(previews.isEmpty())walk(root,density,screenWidth,screenHeight,out,visited,im,comments,false);else for(AccessibilityNodeInfo preview:previews)walk(preview,density,screenWidth,screenHeight,out,visited,im,true,false);
+        boolean im=isIm(root);
+        if(previews.isEmpty()){
+            AccessibilityNodeInfo commentBody=findCommentBody(root,density,screenWidth);
+            if(commentBody!=null)walk(commentBody,density,screenWidth,screenHeight,out,visited,false,true,true);
+            else walk(root,density,screenWidth,screenHeight,out,visited,im,hasCommentInput(root,new int[]{0}),false);
+        }else for(AccessibilityNodeInfo preview:previews)walk(preview,density,screenWidth,screenHeight,out,visited,im,true,false);
         if(!previews.isEmpty()){
             boolean animated=hasExactText(previews.get(0),"动图")||hasExactText(previews.get(0),"实况");
             if(out.isEmpty()){
@@ -76,6 +83,55 @@ public final class SelectionTargets {
         if(n==null||visited[0]++>1400)return false;
         if(n.isVisibleToUser()&&isCommentPrompt(String.valueOf(n.getClassName()),String.valueOf(n.getHintText()),String.valueOf(n.getText()),String.valueOf(n.getContentDescription())))return true;
         for(int i=0;i<n.getChildCount();i++)if(hasCommentInput(n.getChild(i),visited))return true;return false;
+    }
+    static boolean isSelectedCommentTab(String cls,boolean selected,String label){
+        return selected&&(cls.endsWith("$Tab")||cls.endsWith(".Tab"))&&label!=null&&COMMENT_TAB.matcher(label.trim()).matches();
+    }
+    static boolean isReplyLabel(String label){
+        return label!=null&&(label.trim().equals("回复")||EXPAND_REPLIES.matcher(label.trim()).matches());
+    }
+    static boolean followsCommentTab(int headerBottom,int bodyTop,int bodyWidth,int screenWidth,float density){
+        return bodyTop>=headerBottom&&bodyTop-headerBottom<=48*density&&bodyWidth>=screenWidth*.6f;
+    }
+    private static AccessibilityNodeInfo findCommentBody(AccessibilityNodeInfo root,float density,int screenWidth){
+        if(root==null)return null;
+        for(AccessibilityNodeInfo title:root.findAccessibilityNodeInfosByText("评论")){
+            if(!title.isVisibleToUser())continue;
+            String label=title.getText()!=null?title.getText().toString():String.valueOf(title.getContentDescription());
+            if(!COMMENT_TAB.matcher(label.trim()).matches())continue;
+            AccessibilityNodeInfo tab=title;
+            for(int depth=0;tab!=null&&depth<4&&!isSelectedCommentTab(String.valueOf(tab.getClassName()),tab.isSelected(),label);depth++)tab=tab.getParent();
+            if(tab==null||!isSelectedCommentTab(String.valueOf(tab.getClassName()),tab.isSelected(),label))continue;
+            Rect header=new Rect();tab.getBoundsInScreen(header);
+            AccessibilityNodeInfo owner=tab.getParent();
+            for(int depth=0;owner!=null&&depth<6&&!owner.equals(root);depth++,owner=owner.getParent()){
+                AccessibilityNodeInfo body=findCommentCompose(owner,header.bottom,density,screenWidth,new int[]{0});
+                if(body!=null)return body;
+            }
+        }
+        return null;
+    }
+    private static AccessibilityNodeInfo findCommentCompose(AccessibilityNodeInfo node,int headerBottom,float density,int screenWidth,int[] visited){
+        if(node==null||visited[0]++>=350)return null;
+        Rect bounds=new Rect();node.getBoundsInScreen(bounds);
+        if(bounds.bottom<=headerBottom)return null;
+        if(node.isVisibleToUser()&&String.valueOf(node.getClassName()).contains("ComposeView")
+                &&followsCommentTab(headerBottom,bounds.top,bounds.width(),screenWidth,density)
+                &&hasReplyRow(node,bounds,new int[]{0}))return node;
+        for(int i=0;i<node.getChildCount();i++){
+            AccessibilityNodeInfo body=findCommentCompose(node.getChild(i),headerBottom,density,screenWidth,visited);
+            if(body!=null)return body;
+        }
+        return null;
+    }
+    private static boolean hasReplyRow(AccessibilityNodeInfo node,Rect body,int[] visited){
+        if(node==null||visited[0]++>=350)return false;
+        if(node.isVisibleToUser()&&(isReplyLabel(String.valueOf(node.getText()))||isReplyLabel(String.valueOf(node.getContentDescription())))){
+            Rect bounds=new Rect();node.getBoundsInScreen(bounds);
+            if(!bounds.isEmpty()&&body.contains(bounds))return true;
+        }
+        for(int i=0;i<node.getChildCount();i++)if(hasReplyRow(node.getChild(i),body,visited))return true;
+        return false;
     }
     static boolean isCommentPrompt(String cls,String hint,String text,String description){
         String prompt=hint==null||hint.isEmpty()||hint.equals("null")?text:hint;

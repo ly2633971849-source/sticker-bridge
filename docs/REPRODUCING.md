@@ -42,7 +42,7 @@ python tests/verify_video_import_android.py --device SERIAL --source repro-incom
 
 优先用 Android 11（最低版本）与较新的模拟器各进行一次导入；涉及选框或系统安装器时，再选择一台真机。没有测到的机型应填「未测」，无需为了提交而声明兼容。
 
-评论区识别的主机回归：`python tests/verify_selection_targets.py`。用合成节点验证抖音 41.1 的两种评论入口，以及匿名图片节点不会在普通页面、头像或按钮区域被放宽识别。
+评论区识别的主机回归：`python tests/verify_selection_targets.py`。覆盖选中的评论标签、数量缩写、回复标记，以及评论区与上方视频的边界。实机复测时至少换一个评论区，确认底部提示改了也能选，其他页面的计数按钮不会开启评论区推断。
 
 ## 提交可公开的信息
 
