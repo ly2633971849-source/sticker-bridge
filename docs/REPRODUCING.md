@@ -21,6 +21,13 @@ adb -s SERIAL push repro-motion.mp4 /sdcard/Download/
 python tests/verify_video_import_android.py --device SERIAL --source repro-motion.mp4 --name synthetic-motion
 ```
 
+针对「实况只有封面」的回归，用脚本从零生成一张声明包含动画、实际上没有视频片段的 JPEG。预期显示动画缺失，且相册没有新增静态封面：
+
+```sh
+python tests/make_motion_cover.py repro-incomplete.jpg
+python tests/verify_video_import_android.py --device SERIAL --source repro-incomplete.jpg --mime image/jpeg --expect-missing-motion --name synthetic-incomplete
+```
+
 如果设备的媒体扫描接口不立即登记新文件，可先手动用系统文件选择器完成验证。自动测试会在本机 `build/video-import/` 写入日志和产物，只整理需要公开的结果字段。
 
 ## 按改动选择验证
