@@ -32,3 +32,5 @@ jobs:
         run: python -m pip install Pillow==12.3.0
       - name: Test GIF frame timing, transparency and LZW
         run: python tests/verify_encoder.py
+      - name: Test comment picker recognition
+        run: python tests/verify_selection_targets.py
