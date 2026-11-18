@@ -166,7 +166,11 @@ public final class BridgeAccessibility extends AccessibilityService {
         }
         private void choose(){
             if(sourceRoot()==null){Jobs.toast(BridgeAccessibility.this,"请先在抖音里打开想搬的表情");return;}
-            collect();if(targets.isEmpty()){Jobs.toast(BridgeAccessibility.this,"没有找到可选图片或视频，请点开目标后再选");return;}
+            collect();if(targets.isEmpty()){
+                Diagnostics.begin(Diagnostics.Operation.PICK);
+                Diagnostics.end(Diagnostics.Result.FAILED,Diagnostics.Failure.NO_TARGET);
+                Jobs.toast(BridgeAccessibility.this,"没有找到可选图片或视频，请点开目标后再选");return;
+            }
             expand();choosing=true;target=null;invalidate();
             if(targets.size()==1&&targets.get(0).rank<=2){
                 SelectionTargets.Target only=targets.get(0);target=new Rect(only.bounds);previewing=true;invalidate();final int version=++sequence;

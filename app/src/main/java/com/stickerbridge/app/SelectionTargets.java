@@ -27,7 +27,7 @@ public final class SelectionTargets {
             if(out.isEmpty()){
                 AccessibilityNodeInfo host=previewHost(previews.get(0),screenWidth,screenHeight,new int[]{0});if(host==null)host=previews.get(0);Rect raw=new Rect();host.getBoundsInScreen(raw);Rect b=visibleBounds(2,raw,density,screenWidth,screenHeight);
                 if(b!=null){Target fallback=new Target(b,raw,String.valueOf(host.getViewIdResourceName()),String.valueOf(host.getContentDescription()),2);fallback.previewViewport=true;fallback.animationExpected=animated;out.add(fallback);}
-            }else for(Target target:out)target.animationExpected=animated;
+            }else for(Target target:out)target.animationExpected|=animated;
         }
         for(int i=out.size()-1;i>=0;i--){Target parent=out.get(i);boolean nested=false;for(Target child:out)if(child!=parent&&child.rank<=parent.rank&&parent.bounds.contains(child.bounds)&&!parent.bounds.equals(child.bounds)){nested=true;break;}if(nested)out.remove(i);}
         return out;
@@ -74,11 +74,20 @@ public final class SelectionTargets {
     }
     private static boolean hasCommentInput(AccessibilityNodeInfo n,int[] visited){
         if(n==null||visited[0]++>1400)return false;
-        if(n.isVisibleToUser()&&String.valueOf(n.getClassName()).contains("EditText")){
-            CharSequence hint=n.getHintText();String prompt=hint==null||hint.length()==0?String.valueOf(n.getText()):hint.toString();
-            if(prompt.contains("评论")||prompt.contains("说点什么"))return true;
-        }
+        if(n.isVisibleToUser()&&isCommentPrompt(String.valueOf(n.getClassName()),String.valueOf(n.getHintText()),String.valueOf(n.getText()),String.valueOf(n.getContentDescription())))return true;
         for(int i=0;i<n.getChildCount();i++)if(hasCommentInput(n.getChild(i),visited))return true;return false;
+    }
+    static boolean isCommentPrompt(String cls,String hint,String text,String description){
+        String prompt=hint==null||hint.isEmpty()||hint.equals("null")?text:hint;
+        if(cls.contains("EditText"))return prompt!=null&&(prompt.contains("评论")||prompt.contains("说点什么"));
+        if(!cls.equals("android.widget.TextView")&&!cls.equals("android.view.View"))return false;
+        return commentPlaceholder(text)||commentPlaceholder(description);
+    }
+    private static boolean commentPlaceholder(String label){
+        if(label==null)return false;
+        String prompt=label.trim();
+        return prompt.equals("发条评论")||prompt.equals("写评论")||prompt.equals("期待你的评论")
+                ||prompt.equals("发条评论，和大家一起讨论")||prompt.equals("发条评论,和大家一起讨论");
     }
     public static boolean mediaClassAllowed(String cls){return !cls.endsWith("Button")&&!cls.endsWith("CheckBox")&&!cls.contains("EditText");}
     public static Rect visibleBounds(int rank,Rect original,float density,int width,int height){
