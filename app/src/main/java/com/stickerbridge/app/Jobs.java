@@ -30,23 +30,16 @@ public final class Jobs {
     private static boolean begin(Context c,Diagnostics.Operation operation){if(State.beginTask(operation))return true;toast(c,"正在处理，请等这一张保存完成");return false;}
     public static void pick(Context context,Bitmap screen,int x,int y,Rect bounds,String scope,long selectionId,String targetId,String targetDescription,int targetRank,boolean animationExpected){
         Context c=context.getApplicationContext();Diagnostics.phase(Diagnostics.Phase.SOURCE_LOOKUP);State.lookingForOriginal=true;State.update(c,"正在查找原件","找到可用原件后才开始转换。");State.advanceProgress(5);
-        State.IO.execute(()->{File source=null;try{
+        State.IO.execute(()->{File source=null;Rect crop=new Rect(bounds);try{
             long lookupStarted=android.os.SystemClock.elapsedRealtime();
             if(targetRank<0||targetRank>=99)throw new IllegalArgumentException("当前选区不是图片或视频，请重新选择目标");
-            Rect crop=new Rect(bounds);if(!crop.intersect(0,0,screen.getWidth(),screen.getHeight())||crop.isEmpty())throw new IllegalArgumentException("选框已离开图片，请重新选择");
+            if(!crop.intersect(0,0,screen.getWidth(),screen.getHeight())||crop.isEmpty())throw new IllegalArgumentException("选框已离开图片，请重新选择");
             Rect badge=!animationExpected&&!scope.equals("im")&&targetRank>=2?MotionBadge.find(screen,crop,c.getResources().getDisplayMetrics().density):null;
             final boolean motionRequired=animationExpected||badge!=null;
             if(motionRequired){JSONObject current=new JSONObject(State.selection.toString()).put("animationExpected",true).put("motionEvidence",badge==null?"accessibility_label":"visual_live_badge");if(badge!=null)current.put("motionBadgeBounds",badge.flattenToString());State.selection=current;if(Diagnostics.debug(c))Files.write(new File(c.getFilesDir(),"selection.json").toPath(),current.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}
-            if (State.prefs(c).getBoolean("force_single_frame", false)) {
-                if (motionRequired) throw new JobFailure(Diagnostics.Failure.MOTION_UNAVAILABLE,
-                        "当前是静态截图模式。要保留动画，请用「更多 → 导入图片或视频」选择完整原文件。");
-                convertSelectionFrame(c, screen, crop, selectionId, targetRank);
-                return;
-            }
             SourceClient client = new SourceClient(c);
             if (!client.supportsOriginals()) {
-                throw new JobFailure(Diagnostics.Failure.CONNECTION,
-                        "原件读取助手未连接，这次未保存。请用「更多 → 导入图片或视频」选择原文件。");
+                throw originalUnavailable(Diagnostics.Failure.CONNECTION, "原件读取暂不可用。");
             }
             if(Diagnostics.debug(c)){
                 Bitmap preview=Bitmap.createBitmap(screen,crop.left,crop.top,crop.width(),crop.height());
@@ -98,11 +91,10 @@ public final class Jobs {
                 Files.write(new File(c.getFilesDir(),"source-resolution.json").toPath(),report.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
             if(!confident(hits,.105,.02)){
-                if(android.os.SystemClock.elapsedRealtime()>=deadline)throw new JobFailure(Diagnostics.Failure.LOOKUP_TIMEOUT,
-                        "查找原件超时，未保存。若抖音能保存或分享完整文件，可导入表情直达。");
-                throw new JobFailure(motionRequired?Diagnostics.Failure.MOTION_UNAVAILABLE:Diagnostics.Failure.NO_ORIGINAL,
-                        motionRequired?"没有找到这张动图的完整原件，未保存。若抖音能保存或分享文件，可导入表情直达。"
-                                :"没有找到与选区匹配的原件，未保存。若抖音能保存或分享文件，可导入表情直达。");
+                if(android.os.SystemClock.elapsedRealtime()>=deadline)throw originalUnavailable(Diagnostics.Failure.LOOKUP_TIMEOUT,
+                        "查找原件超时。");
+                throw originalUnavailable(motionRequired?Diagnostics.Failure.MOTION_UNAVAILABLE:Diagnostics.Failure.NO_ORIGINAL,
+                        motionRequired?"没有找到这张动图的完整原件。":"没有找到与选区匹配的原件。");
             }
             State.lookingForOriginal=false;
             State.advanceProgress(32);
@@ -110,7 +102,46 @@ public final class Jobs {
             Diagnostics.phase(Diagnostics.Phase.INPUT_READ);if(!screen.isRecycled())screen.recycle();long readStarted=android.os.SystemClock.elapsedRealtime();source=client.fetch(c,selected.media.getString("path"));String sourceHash=sha256(source);selection.put("sourceReadMs",android.os.SystemClock.elapsedRealtime()-readStarted);
             if(!selected.media.optString("sha256").isEmpty()&&!sourceHash.equals(selected.media.optString("sha256"))){client.forget(c,selected.media.getString("path"));throw new IllegalArgumentException("原文件已更新，这次未保存，请重新选择");}
             convert(c,source,selected.media.getString("path"),"screen_selection",selectionId,selection,selected.media,sourceHash);client.remember(c,selected.media);
-        }catch(OutOfMemoryError e){State.cancelSelection(selectionId);lowMemory(c);}catch(Exception e){State.cancelSelection(selectionId);fail(c,e);}finally{if(!screen.isRecycled())screen.recycle();if(source!=null)source.delete();}});
+        }catch(OutOfMemoryError e){State.cancelSelection(selectionId);lowMemory(c);}catch(Exception e){
+            State.cancelSelection(selectionId);
+            fail(c,e);
+            if (e instanceof OriginalUnavailable && !screen.isRecycled()) offerStaticFrame(screen, crop, selectionId, targetRank, e.getMessage());
+        }finally{if(!screen.isRecycled())screen.recycle();if(source!=null)source.delete();}});
+    }
+
+    private static void offerStaticFrame(Bitmap screen, Rect crop, long selectionId, int targetRank, String reason) {
+        BridgeAccessibility bridge = BridgeAccessibility.live;
+        if (bridge == null || crop.isEmpty()) return;
+        Bitmap frame;
+        try {
+            float scale = Math.min(1f, 480f / Math.max(crop.width(), crop.height()));
+            android.graphics.Matrix resize = new android.graphics.Matrix();
+            resize.setScale(scale, scale);
+            frame = Bitmap.createBitmap(screen, crop.left, crop.top, crop.width(), crop.height(), resize, true);
+            if (frame == screen) frame = screen.copy(Bitmap.Config.ARGB_8888, false);
+        } catch (RuntimeException | OutOfMemoryError error) {
+            return;
+        }
+        Bitmap preview = frame;
+        if (preview != null) State.MAIN.post(() -> bridge.offerStaticFrame(preview, selectionId, targetRank, reason));
+    }
+
+    static boolean saveStaticFrame(Context context, Bitmap frame, int targetRank) {
+        Context c = context.getApplicationContext();
+        if (!begin(c, Diagnostics.Operation.PICK)) return false;
+        long job = State.jobId;
+        State.IO.execute(() -> {
+            try {
+                convertSelectionFrame(c, frame, new Rect(0, 0, frame.getWidth(), frame.getHeight()), job, targetRank);
+            } catch (OutOfMemoryError error) {
+                lowMemory(c);
+            } catch (Exception error) {
+                fail(c, error);
+            } finally {
+                frame.recycle();
+            }
+        });
+        return true;
     }
     private static double runnerUp(List<Matcher.Hit> hits) {
         return hits.size() > 1 ? hits.get(1).score : Double.POSITIVE_INFINITY;
@@ -268,7 +299,8 @@ public final class Jobs {
             result.put("mediaUri",uri.toString()).put("album","Pictures/StickerBridge").put("savedAt",System.currentTimeMillis()).put("savedToAlbum",true);
             result.put("albumWriteMs",android.os.SystemClock.elapsedRealtime()-albumStarted).put("totalMs",android.os.SystemClock.elapsedRealtime()-State.jobStartedElapsed);if(crop==null)ConversionCache.remember(c,result);
             State.last=result;if(selection!=null)State.selection=new JSONObject(result.toString()).put("pending",false);State.prefs(c).edit().putString("albumLast",result.toString()).commit();
-            State.finishSaved(c,input.equals("selection_frame")?"静态截图已保存，在 QQ 收藏里从最近照片添加。":result.optInt("frames")>1?"动态 GIF 已保存，在 QQ 收藏里从最近照片添加。":"静态 PNG 已保存，在 QQ 收藏里从最近照片添加。");
+            String savedType = input.equals("selection_frame") ? "静态截图" : result.optInt("frames") > 1 ? "动态 GIF" : "静态 PNG";
+            State.finishSaved(c, savedType + "已保存，可在 QQ 或微信的表情添加页从相册选择。");
         }finally{if(crop!=null||!saved&&cached==null)output.delete();}
     }
     private static Uri save(Context c,File file,String mime,long id)throws Exception{
@@ -279,9 +311,19 @@ public final class Jobs {
             ContentValues done=new ContentValues();done.put(MediaStore.Images.Media.IS_PENDING,0);if(c.getContentResolver().update(uri,done,null,null)!=1)throw new java.io.IOException("相册文件未能完成保存");State.advanceProgress(99);return uri;
         }catch(Exception e){c.getContentResolver().delete(uri,null,null);throw e;}
     }
-    private static final class JobFailure extends IllegalArgumentException {
+    private static class JobFailure extends IllegalArgumentException {
         final Diagnostics.Failure code;
         JobFailure(Diagnostics.Failure code,String message){super(message);this.code=code;}
+    }
+
+    private static final class OriginalUnavailable extends JobFailure {
+        OriginalUnavailable(Diagnostics.Failure code, String message) {
+            super(code, message);
+        }
+    }
+
+    private static OriginalUnavailable originalUnavailable(Diagnostics.Failure code, String reason) {
+        return new OriginalUnavailable(code, reason + " 这次未保存原件。");
     }
     private static void lowMemory(Context c){
         State.finishFailure(c,"这次还未保存","当前手机可用内存不足，已停止处理。请关闭其它应用后重试。",Diagnostics.Failure.MEMORY);

@@ -1,6 +1,7 @@
 package com.stickerbridge.app;
 
 import android.accessibilityservice.AccessibilityService;
+import android.app.AlertDialog;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -19,6 +20,8 @@ import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.TextView;
 import java.util.List;
 
@@ -31,6 +34,7 @@ public final class BridgeAccessibility extends AccessibilityService {
     private int bubbleX,bubbleY;
     private float density;
     private TextView progress;
+    private AlertDialog staticOffer;
     private boolean progressAttached;
     private int statusViewsCreated;
     private int statusWindowErrors;
@@ -61,8 +65,9 @@ public final class BridgeAccessibility extends AccessibilityService {
     private boolean locked(){android.app.KeyguardManager keyguard=getSystemService(android.app.KeyguardManager.class);return keyguard!=null&&keyguard.isKeyguardLocked();}
     private void syncBubbleVisibility(){
         if(!attached||capturePending)return;
-        if(locked()){if(picker.expanded)picker.collapse();picker.setVisibility(View.GONE);return;}
+        if(locked()){dismissStaticOffer();if(picker.expanded)picker.collapse();picker.setVisibility(View.GONE);return;}
         AccessibilityNodeInfo root=primaryRoot();CharSequence owner=root==null?null:root.getPackageName();
+        if (staticOffer != null && (owner == null || !"com.ss.android.ugc.aweme".contentEquals(owner))) dismissStaticOffer();
         // Keep the global entry available outside this app without covering its own controls.
         if(owner!=null&&getPackageName().contentEquals(owner)){if(picker.expanded)picker.collapse();picker.setVisibility(View.GONE);return;}
         if(picker.expanded&&(owner==null||!"com.ss.android.ugc.aweme".contentEquals(owner)))picker.collapse();
@@ -77,7 +82,53 @@ public final class BridgeAccessibility extends AccessibilityService {
         catch(IllegalArgumentException absent){progressAttached=false;}
         catch(RuntimeException error){statusWindowErrors++;lastStatusError=error.toString();State.MAIN.postDelayed(statusExpiry,100);}
     }
-    private void removeBubble(){State.MAIN.removeCallbacks(statusRefresh);State.MAIN.removeCallbacks(statusExpiry);if(picker!=null){picker.sequence++;picker.previewing=false;picker.choosing=false;picker.dragging=false;}if(attached){try{windows.removeView(picker);}catch(Exception ignored){}attached=false;}removeStatus();}
+    private void removeBubble(){dismissStaticOffer();State.MAIN.removeCallbacks(statusRefresh);State.MAIN.removeCallbacks(statusExpiry);if(picker!=null){picker.sequence++;picker.previewing=false;picker.choosing=false;picker.dragging=false;}if(attached){try{windows.removeView(picker);}catch(Exception ignored){}attached=false;}removeStatus();}
+
+    private void dismissStaticOffer() {
+        if (staticOffer != null) staticOffer.dismiss();
+    }
+
+    void offerStaticFrame(Bitmap frame, long selectionId, int targetRank, String reason) {
+        if (live != this || !attached || State.busy || State.jobId != selectionId || sourceRoot() == null) {
+            frame.recycle();
+            return;
+        }
+        dismissStaticOffer();
+        FrameLayout holder = new FrameLayout(this);
+        ImageView image = new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setImageBitmap(frame);
+        image.setContentDescription("选区静态预览");
+        holder.addView(image, new FrameLayout.LayoutParams(-1, dp(144)));
+        final boolean[] transferred = {false};
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("保存当前画面？")
+                .setMessage(reason + (reason.endsWith("。") ? "" : "。") + " 保存静态图只保留当前一帧。")
+                .setView(holder)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存静态图", (d, button) -> {
+                    if (live != this || State.jobId != selectionId || sourceRoot() == null) return;
+                    image.setImageDrawable(null);
+                    transferred[0] = Jobs.saveStaticFrame(this, frame, targetRank);
+                }).create();
+        Runnable expire = dialog::dismiss;
+        dialog.setOnDismissListener(d -> {
+            State.MAIN.removeCallbacks(expire);
+            if (staticOffer == dialog) staticOffer = null;
+            image.setImageDrawable(null);
+            if (!transferred[0] && !frame.isRecycled()) frame.recycle();
+        });
+        try {
+            dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY);
+            staticOffer = dialog;
+            dialog.show();
+            State.MAIN.postDelayed(expire, 20000);
+        } catch (RuntimeException error) {
+            staticOffer = null;
+            image.setImageDrawable(null);
+            if (!frame.isRecycled()) frame.recycle();
+        }
+    }
     public org.json.JSONObject feedbackStatus(){org.json.JSONObject result=new org.json.JSONObject();try{result.put("attached",progressAttached).put("viewAttached",progress!=null&&progress.isAttachedToWindow()).put("visible",progressAttached&&progress!=null&&progress.isShown()).put("message",progress==null?"":String.valueOf(progress.getText())).put("hiddenForCapture",capturePending).put("viewInstances",statusViewsCreated).put("expiresInMs",State.busy?-1:Math.max(0,Math.max(State.noticeUntil,State.hintUntil)-android.os.SystemClock.elapsedRealtime())).put("windowErrors",statusWindowErrors).put("lastWindowError",lastStatusError).put("jobId",State.jobId);}catch(Exception ignored){}return result;}
     public void refreshProgress(){
         State.MAIN.removeCallbacks(statusRefresh);if(attached&&picker!=null)picker.invalidate();
@@ -112,6 +163,7 @@ public final class BridgeAccessibility extends AccessibilityService {
     public interface ScreenCallback{void ready(Bitmap b);void failed(int code);}
     public void screenshot(ScreenCallback callback){takeScreenshot(0,command->State.MAIN.post(command),new TakeScreenshotCallback(){@Override public void onSuccess(ScreenshotResult result){HardwareBuffer hardware=result.getHardwareBuffer();Bitmap wrapper=null;try{wrapper=Bitmap.wrapHardwareBuffer(hardware,result.getColorSpace());if(wrapper==null)throw new IllegalStateException();Bitmap copy=wrapper.copy(Bitmap.Config.ARGB_8888,false);callback.ready(copy);}catch(Exception e){callback.failed(-1);}finally{if(wrapper!=null)wrapper.recycle();hardware.close();}}@Override public void onFailure(int code){callback.failed(code);}});}
     private void selected(int x,int y,SelectionTargets.Target hit,String scope,String mode,int targetCount,int originX,int originY){
+        dismissStaticOffer();
         if(hit==null||sourceRoot()==null){Jobs.toast(this,"请先在抖音里选中图片、动图或小视频");return;}
         if(!State.beginTask(Diagnostics.Operation.PICK)){rejectedSelections++;Jobs.toast(this,"上一张表情仍在处理中");return;}
         Diagnostics.phase(Diagnostics.Phase.CAPTURE);

@@ -1,11 +1,11 @@
 # 贡献和发布
 
-修复从一个可复现的问题开始。先按[复现指南](docs/REPRODUCING.md)记录版本、输入和实际结果，判断问题是出在目标选取、原文件读取、转换，还是相册发布。修复后用同一个输入验证，并在 PR 里写明仍未测试的设备或媒体类型。涉及性能时，首次转换和重复导入分开计时。
+修复从一个可复现的问题开始。先按[复现指南](docs/REPRODUCING.md)记录版本、输入和实际结果，判断问题是出在目标选取、原文件读取、转换，还是相册发布。修复后用同一个输入验证，并在 PR 里写明仍未测试的设备或媒体类型。涉及性能时，分别记录首次处理和重复处理的耗时。
 
 | 处理路径 | 源码入口 |
 | --- | --- |
-| 首页、系统选文件、系统分享入口 | `MainActivity.java` |
-| 悬浮按钮、目标边界及画面识别 | `BridgeAccessibility.java`、`SelectionTargets.java`、`PreviewGeometry.java`、`MotionBadge.java` |
+| 首页、相册结果与系统分享兼容入口 | `MainActivity.java` |
+| 悬浮按钮、静态图确认、目标边界及画面识别 | `BridgeAccessibility.java`、`SelectionTargets.java`、`PreviewGeometry.java`、`MotionBadge.java` |
 | 原件候选和索引兼容性 | `SourceClient.java`、`SourceIndexFiles.java` |
 | 素材读取、转换、缓存和相册发布 | `Jobs.java`、`MediaFiles.java`、`ConversionCache.java` |
 | 视频帧、WebP 和 GIF | `VideoFrames.java`、`WebpAnimation.java`、`GifWriter.java`、`GifInfo.java` |

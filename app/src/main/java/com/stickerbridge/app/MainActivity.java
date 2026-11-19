@@ -2,7 +2,6 @@ package com.stickerbridge.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Context;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.ImageDecoder;
@@ -29,26 +28,21 @@ import java.io.File;
 import org.json.JSONObject;
 
 public final class MainActivity extends Activity {
-    private static final int PICK_FILE = 7;
-    private static final int PICK_CROP_VIDEO = 8;
-    private static final int EDIT_CROP_VIDEO = 9;
     private static final java.util.concurrent.Executor PREVIEW_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
     private static final int BG = 0xff111816, CARD = 0xff1b2722, FG = 0xffeff7f2;
     private static final int MUTED = 0xffa7bbb0, ACCENT = 0xff8cf0b8, NOTICE = 0xffebcf91;
     private LinearLayout content, taskCard, lastCard;
     private TextView status, detail, primaryHint, lastTitle, lastFormat, previewPlaceholder;
-    private Button primary, more, preparation, viewLast;
+    private Button primary, more, viewLast;
     private ProgressBar progress;
     private ImageView preview;
-    private boolean resumed, helper, helperChecked, checkingConnection;
+    private boolean resumed;
     private String renderedLast = "";
-    private Uri cropSource;
     private AnimatedImageDrawable animation;
     private final Runnable stateListener = this::refresh;
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
-        if (saved != null) cropSource = saved.getParcelable("cropSource");
         State.restore(this);
         getWindow().setDecorFitsSystemWindows(false);
         getWindow().setStatusBarColor(BG);
@@ -64,7 +58,6 @@ public final class MainActivity extends Activity {
         if (BridgeAccessibility.live != null) BridgeAccessibility.live.refreshBubble();
         refresh();
         if (animation != null) animation.start();
-        checkConnection();
         if (!State.busy) State.MAIN.postDelayed(stateListener, 350);
     }
 
@@ -81,11 +74,6 @@ public final class MainActivity extends Activity {
         if (animation != null) animation.stop();
         if (State.listener == stateListener) State.listener = null;
         super.onDestroy();
-    }
-
-    @Override protected void onSaveInstanceState(Bundle out) {
-        super.onSaveInstanceState(out);
-        out.putParcelable("cropSource", cropSource);
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -185,19 +173,6 @@ public final class MainActivity extends Activity {
         return false;
     }
 
-    private void restorePicker() {
-        if (!canAct()) return;
-        State.prefs(this).edit().putBoolean("enabled", true).apply();
-        BridgeAccessibility service = BridgeAccessibility.live;
-        if (service == null) {
-            PickerSettings.open(this);
-            return;
-        }
-        service.rebuildBubble();
-        State.changed();
-        Jobs.toast(this, "选取已恢复，打开抖音后会显示绿色“选”");
-    }
-
     private void openDouyin() {
         if (!canAct()) return;
         State.prefs(this).edit().putBoolean("enabled", true).apply();
@@ -219,55 +194,20 @@ public final class MainActivity extends Activity {
     private void showMore() {
         PopupMenu popup = new PopupMenu(this, more);
         Menu menu = popup.getMenu();
-        menu.add(0, 1, 0, "恢复悬浮按钮");
-        if (BridgeAccessibility.live != null && State.prefs(this).getBoolean("enabled", true))
-            menu.add(0, 2, 1, "隐藏悬浮按钮");
-        menu.add(1, 3, 2, "导入图片或视频");
-        menu.add(1, 8, 3, "从视频裁剪表情");
-        menu.add(2, 4, 4, "无障碍设置");
-        menu.add(2, 6, 5, "检查更新");
-        menu.add(2, 7, 6, "复制诊断信息");
-        menu.add(2, 5, 7, "使用帮助");
-        menu.setGroupDividerEnabled(true);
+        menu.add(0, 6, 0, "检查更新");
+        menu.add(0, 7, 1, "复制诊断信息");
+        menu.add(0, 5, 2, "使用帮助");
         popup.setOnMenuItemClickListener(item -> {
             if (!canAct()) return true;
             switch (item.getItemId()) {
-                case 1: restorePicker(); break;
-                case 2:
-                    State.prefs(this).edit().putBoolean("enabled", false).apply();
-                    if (BridgeAccessibility.live != null) BridgeAccessibility.live.refreshBubble();
-                    State.changed();
-                    Jobs.toast(this, "已隐藏，可在“更多”中恢复");
-                    break;
-                case 3: pickFile(); break;
-                case 4: PickerSettings.open(this); break;
                 case 5: showHelp(); break;
                 case 6: AppUpdates.show(this); break;
                 case 7: showDiagnostics(); break;
-                case 8: pickCropVideo(); break;
                 default: return false;
             }
             return true;
         });
         popup.show();
-    }
-
-    private void showPreparation() {
-        boolean staticCapture = State.prefs(this).getBoolean("force_single_frame", false);
-        String current = staticCapture ? "当前为静态截图模式，框选普通图片时保存当前画面为一帧 PNG。"
-                : helper ? "当前为原件优先，原件助手已连接。"
-                : "当前为原件优先，原件助手未连接时，框选会提示如何导入文件。";
-        new AlertDialog.Builder(this)
-                .setTitle("保存方式")
-                .setMessage(current + "\n\n框选需要开启系统无障碍。"
-                        + "\n\n手机已有完整动图或视频时，点「更多 → 导入图片或视频」即可生成 GIF，无需原件助手。")
-                .setPositiveButton(staticCapture ? "切换到原件优先" : "仅保存静态截图", (dialog, which) -> {
-                    State.prefs(this).edit().putBoolean("force_single_frame", !staticCapture).apply();
-                    updateStatus();
-                })
-                .setNeutralButton("导入文件", (dialog, which) -> pickFile())
-                .setNegativeButton("关闭", null)
-                .show();
     }
 
     private void showDiagnostics() {
@@ -284,13 +224,11 @@ public final class MainActivity extends Activity {
     private void showHelp() {
         new AlertDialog.Builder(this)
                 .setTitle("怎么保存表情")
-                .setMessage("1. 点首页按钮，在系统无障碍设置中开启“表情直达 · 框选保存”。"
-                        + "\n\n2. 打开抖音，找到评论图片、动图或小视频。点绿色“选”，再点目标；也可以把按钮拖到目标内松手，边框会自动贴合。"
-                        + "\n\n3. 保存完成后，打开 QQ 收藏，从最近照片添加。"
-                        + "\n\n按钮不见了\n绿色“选”在本应用内不显示。打开抖音后仍未出现时，点“更多 → 恢复悬浮按钮”，再返回抖音。仍无法使用时，在系统无障碍设置中找到“表情直达 · 框选保存”，关闭再开启。不同手机的菜单名称可能不同。"
-                        + "\n\n原件与截图\n默认框选查找原件，原件助手未连接时会提示。只需要当前画面时，点首页「保存方式 → 仅保存静态截图」。手机已有完整动图或视频时，点「更多 → 导入图片或视频」生成 GIF。"
-                        + "\n\n支持范围\n评论图片和静态表情保存为 PNG；动图、短视频和有完整片段的实况照片转为 GIF。原文件最大 32 MB，其中动态 WebP 最大 12 MB。重新生成的动画最长 60 秒，原文件必须完整且可读。视频的声音不写入 GIF。"
-                        + "\n\n保存位置\n手机相册的 StickerBridge 文件夹。")
+                .setMessage("1. 点首页按钮，按提示开启“表情直达 · 框选保存”。"
+                        + "\n\n2. 在抖音点绿色“选”，再点表情。也可以把“选”拖到目标内松手。"
+                        + "\n\n3. 保存后，在 QQ 或微信的表情收藏中，从手机相册手动添加。文件在相册的 StickerBridge 文件夹。"
+                        + "\n\n读不到原件时，如果出现「保存静态图」，可以保存当前这一帧。"
+                        + "\n\n悬浮按钮不见时，返回首页再点一次上方按钮。")
                 .setPositiveButton("知道了", null)
                 .show();
     }
@@ -319,27 +257,17 @@ public final class MainActivity extends Activity {
         more.setTextSize(14);
         more.setTextColor(MUTED);
         more.setBackground(new RippleDrawable(ColorStateList.valueOf(0x338cf0b8), rounded(BG, 14), null));
-        more.setContentDescription("更多设置与帮助");
+        more.setContentDescription("更多更新与帮助");
         header.addView(more, new LinearLayout.LayoutParams(-2, -2));
         LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(-1, -2);
         headerParams.bottomMargin = dp(26);
         content.addView(header, headerParams);
 
         label(content, "把表情存进相册", 28, FG, true, 12);
-        label(content, "抖音评论图片 · 动图 · 小视频", 14, MUTED, false, 12);
+        label(content, "框选抖音表情，保存后从相册添加到 QQ 或微信。", 14, MUTED, false, 12);
         primary = addButton(content, "开启选取", true, this::openDouyin);
         primaryHint = label(content, "", 13, MUTED, false, 0);
         primaryHint.setPadding(dp(2), dp(12), dp(2), dp(2));
-        addButton(content, "导入图片或视频", false, this::pickFile);
-        preparation = button("", false, this::showPreparation);
-        preparation.setTypeface(Typeface.DEFAULT);
-        preparation.setTextSize(13);
-        preparation.setTextColor(MUTED);
-        preparation.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        preparation.setPadding(dp(2), dp(10), dp(2), dp(10));
-        preparation.setBackground(new RippleDrawable(ColorStateList.valueOf(0x228cf0b8), rounded(BG, 10), null));
-        content.addView(preparation, new LinearLayout.LayoutParams(-1, -2));
-
         taskCard = card();
         status = label(taskCard, "", 18, FG, true, 6);
         detail = label(taskCard, "", 13, MUTED, false, 0);
@@ -374,7 +302,7 @@ public final class MainActivity extends Activity {
         lastFormat = label(lastInfo, "", 13, MUTED, false, 0);
         lastRow.addView(lastInfo, new LinearLayout.LayoutParams(0, -2, 1));
         lastCard.addView(lastRow, new LinearLayout.LayoutParams(-1, -2));
-        TextView instruction = label(lastCard, "在 QQ 收藏中，从最近照片添加。", 13, MUTED, false, 0);
+        TextView instruction = label(lastCard, "去 QQ 或微信的表情收藏，从相册添加。", 13, MUTED, false, 0);
         instruction.setPadding(0, dp(14), 0, 0);
         viewLast = addButton(lastCard, "在相册中查看", false, this::viewLast);
         updateStatus();
@@ -427,54 +355,6 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void pickFile() {
-        if (!canAct()) return;
-        try {
-            startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                    .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
-                    .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "video/*"})
-                    .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false), PICK_FILE);
-        } catch (Exception error) {
-            Jobs.toast(this, "可以将原表情图片分享给表情直达");
-        }
-    }
-
-    private void pickCropVideo() {
-        try {
-            startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                    .addCategory(Intent.CATEGORY_OPENABLE).setType("video/*"), PICK_CROP_VIDEO);
-        } catch (android.content.ActivityNotFoundException error) {
-            Jobs.toast(this, "这台手机没有可用的文件选择器");
-        }
-    }
-
-    @Override protected void onActivityResult(int request, int result, Intent data) {
-        super.onActivityResult(request, result, data);
-        if (request == EDIT_CROP_VIDEO) {
-            Uri source = cropSource;
-            cropSource = null;
-            if (result == RESULT_OK && data != null && source != null) {
-                float[] crop = data.getFloatArrayExtra(CropVideoActivity.EXTRA_CROP);
-                if (crop != null && crop.length == 4) Jobs.convertCroppedVideo(this, source,
-                        new android.graphics.RectF(crop[0], crop[1], crop[2], crop[3]));
-            }
-            return;
-        }
-        if (request == PICK_CROP_VIDEO && result == RESULT_OK && data != null && !State.busy) {
-            Uri source = data.getData();
-            if (source != null && "content".equals(source.getScheme())) {
-                cropSource = source;
-                startActivityForResult(new Intent(Intent.ACTION_VIEW, source, this, CropVideoActivity.class)
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), EDIT_CROP_VIDEO);
-            }
-            return;
-        }
-        if (request == PICK_FILE && result == RESULT_OK && data != null) {
-            Uri uri = data.getData();
-            if (uri != null) Jobs.convertShared(this, uri);
-        }
-    }
-
     private void updateStatus() {
         if (content == null) return;
         boolean busy = State.busy;
@@ -489,12 +369,8 @@ public final class MainActivity extends Activity {
         else setText(primaryHint, enabled ? "打开抖音后，点绿色“选”再点目标；也可拖到目标内松手。"
                 : "点击上方按钮，打开抖音后会显示绿色“选”。");
 
-        boolean staticCapture = State.prefs(this).getBoolean("force_single_frame", false);
-        setText(preparation, staticCapture ? "静态截图 · 保存方式  ›" : "原件优先 · 保存方式  ›");
-        preparation.setTextColor(MUTED);
         available(primary, !busy);
         available(more, !busy);
-        available(preparation, !busy);
         available(viewLast, !busy);
 
         JSONObject last = State.last;
@@ -517,8 +393,8 @@ public final class MainActivity extends Activity {
         lastCard.setVisibility(hasLast ? View.VISIBLE : View.GONE);
         bindLast(last);
         setText(lastTitle, State.savedResult ? "已保存到相册" : "上次保存的表情");
-        setText(lastFormat, (last.optInt("frames") > 1 ? "动态表情"
-                : "selection_frame".equals(last.optString("inputMethod")) ? "静态截图" : "静态表情")
+        setText(lastFormat, (last.optInt("frames") > 1 ? "GIF 动图"
+                : "selection_frame".equals(last.optString("inputMethod")) ? "PNG 静态截图" : "PNG 静态图")
                 + (display.percent == 100 ? " · 100%" : ""));
     }
 
@@ -526,29 +402,5 @@ public final class MainActivity extends Activity {
         // State notifications and delayed callbacks must never rebuild a paused Activity.
         if (!resumed) return;
         updateStatus();
-        if (!State.busy && !helperChecked && !checkingConnection) checkConnection();
-    }
-
-    private void checkConnection() {
-        if (checkingConnection || State.busy) return;
-        checkingConnection = true;
-        updateStatus();
-        Context app = getApplicationContext();
-        // A slow preparation check must not block local imports on the single job executor.
-        Thread check = new Thread(() -> {
-            boolean connected;
-            try { connected = new SourceClient(app).supportsOriginals(); }
-            catch (Exception error) { connected = false; }
-            final boolean result = connected;
-            State.MAIN.post(() -> {
-                if (isDestroyed()) return;
-                checkingConnection = false;
-                helperChecked = true;
-                helper = result;
-                if (resumed) updateStatus();
-            });
-        }, "sticker-preparation");
-        check.setDaemon(true);
-        check.start();
     }
 }
