@@ -92,18 +92,22 @@ public final class AppUpdates {
             return;
         }
         run(activity, "正在检查更新…", "暂时连不上更新服务器，过会儿再试。", progress -> readRelease(raw, progress), release -> {
+            String installedVersion;
             try {
                 PackageInfo current = installed(activity);
                 if (release.versionCode <= current.getLongVersionCode()) {
                     message(activity, "已是最新版本", "当前版本：" + current.versionName);
                     return;
                 }
+                installedVersion = current.versionName;
             } catch (PackageManager.NameNotFoundException error) {
                 message(activity, "无法检查更新", "暂时无法读取当前版本。");
                 return;
             }
+            String instructions = "当前安装版本：" + installedVersion + "\n可更新版本：" + release.versionName
+                    + "\n下载完成后，请在安卓系统中确认安装。";
             new AlertDialog.Builder(activity).setTitle("发现新版本 " + release.versionName)
-                    .setMessage(release.notes.isEmpty() ? "可以下载更新，安装前由系统确认。" : release.notes)
+                    .setMessage(instructions + (release.notes.isEmpty() ? "" : "\n\n" + release.notes))
                     .setNegativeButton("稍后", null)
                     .setPositiveButton("下载更新", (dialog, button) -> download(activity, release)).show();
         });
@@ -112,13 +116,13 @@ public final class AppUpdates {
     private static void download(Activity activity, Release release) {
         Context context = activity.getApplicationContext();
         run(activity, "正在准备更新…", "下载或校验未完成，未安装任何文件。请重试。",
-                progress -> verifiedApk(context, release, progress), file -> ready(activity, file));
+                progress -> verifiedApk(context, release, progress), file -> ready(activity, file, release.versionName));
     }
 
-    private static void ready(Activity activity, File file) {
+    private static void ready(Activity activity, File file, String versionName) {
         PackageManager manager = activity.getPackageManager();
         AlertDialog ready = new AlertDialog.Builder(activity).setTitle("安装包已校验")
-                .setMessage("接下来由安卓系统显示安装确认。")
+                .setMessage("已下载并校验 " + versionName + "。点「继续安装」，再在安卓系统弹窗中确认覆盖安装。")
                 .setNegativeButton("稍后", null)
                 .setPositiveButton("继续安装", null).create();
         ready.setOnShowListener(dialog -> ready.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
