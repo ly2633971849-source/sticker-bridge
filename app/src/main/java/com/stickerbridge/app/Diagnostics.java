@@ -42,6 +42,10 @@ final class Diagnostics {
         phaseStarted = now;
     }
 
+    static synchronized boolean countedProgressPhase() {
+        return phase == Phase.CONVERT || phase == Phase.ALBUM_WRITE;
+    }
+
     static synchronized void end(Result next, Failure code) {
         if (result != Result.RUNNING) return;
         record(SystemClock.elapsedRealtime());

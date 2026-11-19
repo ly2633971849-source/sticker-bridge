@@ -1,4 +1,4 @@
-"""Run the ISO media brand regression using synthetic headers and JDK 17."""
+"""Verify ISO media classification and source index compatibility with JDK 17."""
 import os
 from pathlib import Path
 import shutil
@@ -24,10 +24,16 @@ with tempfile.TemporaryDirectory(prefix='stickerbridge-media-brands-') as output
     subprocess.run(
         [java_tool('javac'), '-encoding', 'UTF-8', '-d', output,
          str(root / 'app/src/main/java/com/stickerbridge/app/IsoMediaBrands.java'),
-         str(root / 'tests/MediaBrandsProbe.java')],
+         str(root / 'app/src/main/java/com/stickerbridge/app/SourceIndexFiles.java'),
+         str(root / 'tests/MediaBrandsProbe.java'),
+         str(root / 'tests/SourceIndexFilesProbe.java')],
         check=True,
     )
     subprocess.run(
         [java_tool('java'), '-cp', output, 'com.stickerbridge.app.MediaBrandsProbe', output],
+        check=True,
+    )
+    subprocess.run(
+        [java_tool('java'), '-cp', output, 'com.stickerbridge.app.SourceIndexFilesProbe', output],
         check=True,
     )

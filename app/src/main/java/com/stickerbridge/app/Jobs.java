@@ -37,10 +37,16 @@ public final class Jobs {
             Rect badge=!animationExpected&&!scope.equals("im")&&targetRank>=2?MotionBadge.find(screen,crop,c.getResources().getDisplayMetrics().density):null;
             final boolean motionRequired=animationExpected||badge!=null;
             if(motionRequired){JSONObject current=new JSONObject(State.selection.toString()).put("animationExpected",true).put("motionEvidence",badge==null?"accessibility_label":"visual_live_badge");if(badge!=null)current.put("motionBadgeBounds",badge.flattenToString());State.selection=current;if(Diagnostics.debug(c))Files.write(new File(c.getFilesDir(),"selection.json").toPath(),current.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}
-            SourceClient client=State.prefs(c).getBoolean("force_single_frame",false)?null:new SourceClient(c);
-            if(client==null||!client.supportsOriginals()){
-                if(motionRequired)throw new JobFailure(Diagnostics.Failure.MOTION_UNAVAILABLE,"动画原件暂不可读。请从抖音分享或保存原文件后，再导入表情直达。");
-                convertSelectionFrame(c,screen,crop,selectionId,targetRank);return;
+            if (State.prefs(c).getBoolean("force_single_frame", false)) {
+                if (motionRequired) throw new JobFailure(Diagnostics.Failure.MOTION_UNAVAILABLE,
+                        "当前是静态截图模式。要保留动画，请用「更多 → 导入图片或视频」选择完整原文件。");
+                convertSelectionFrame(c, screen, crop, selectionId, targetRank);
+                return;
+            }
+            SourceClient client = new SourceClient(c);
+            if (!client.supportsOriginals()) {
+                throw new JobFailure(Diagnostics.Failure.CONNECTION,
+                        "原件读取助手未连接，这次未保存。请用「更多 → 导入图片或视频」选择原文件。");
             }
             if(Diagnostics.debug(c)){
                 Bitmap preview=Bitmap.createBitmap(screen,crop.left,crop.top,crop.width(),crop.height());
@@ -48,28 +54,47 @@ public final class Jobs {
                 finally{if(preview!=screen)preview.recycle();}
             }
             long deadline=android.os.SystemClock.elapsedRealtime()+LOOKUP_BUDGET_MS;float aspect=(float)crop.width()/crop.height(),density=c.getResources().getDisplayMetrics().density;
-            String sourceScope=scope.equals("im")?"im":"comments";JSONArray known=client.known(c,sourceScope,aspect);
+            boolean messageScope = scope.equals("im");
+            String sourceScope=messageScope?"im":"comments";JSONArray known=client.known(c,sourceScope,aspect);
             if(motionRequired){JSONArray animated=new JSONArray();for(int i=0;i<known.length();i++)if(known.getJSONObject(i).optBoolean("animated"))animated.put(known.getJSONObject(i));known=animated;}
             List<Matcher.Hit> hits=refine(c,client,screen,x,y,crop,scope,Matcher.find(screen,x,y,crop,c.getResources().getDisplayMetrics().density,known),deadline);
             boolean cached=confident(hits,.105,.02),fast=cached;
             int animationPool=0;
+            boolean debug = Diagnostics.debug(c);
+            JSONArray searchPasses = debug ? new JSONArray() : null;
             if(!cached){
-                JSONArray items=known,loaded;Set<String> scanned=new HashSet<>();
-                // A visible IM sticker can be older than hundreds of recently cached avatars.
-                // Search the bounded animation pool before unrelated still files; static stickers retain fallback.
-                if(scope.equals("im")||motionRequired){
-                    final JSONArray seed=known;
+                JSONArray items = known;
+                Set<String> scanned = new HashSet<>();
+                boolean comparisonPending = false;
+                for (SourceLookupPlan.Pass pass : SourceLookupPlan.passes(messageScope, motionRequired)) {
+                    long started = android.os.SystemClock.elapsedRealtime();
+                    if (fast || started >= deadline) break;
+                    long passDeadline = pass.deadline(started, deadline);
+                    JSONArray seed = items;
                     Set<String> earlyRefinements=new HashSet<>();
-                    long earlyDeadline=Math.min(deadline,android.os.SystemClock.elapsedRealtime()+5000);
-                    loaded=client.sourceIndex(c,96,sourceScope,aspect,deadline,5,16,true,scanned,partial->matchAnimationBatch(c,client,screen,x,y,crop,density,seed,partial,earlyRefinements,earlyDeadline));animationPool=loaded.length();items=SourceClient.merge(items,loaded);
-                    hits=refine(c,client,screen,x,y,crop,scope,Matcher.find(screen,x,y,crop,density,items),deadline);fast=confident(hits,.075,.025);
+                    String passScope = messageScope && pass == SourceLookupPlan.Pass.WIDE ? "all" : sourceScope;
+                    JSONArray loaded = client.sourceIndex(c, pass.limit, passScope, aspect, passDeadline,
+                            pass.progressFrom, pass.progressTo, pass.animatedOnly(motionRequired), scanned,
+                            partial -> matchLookupBatch(c, client, screen, x, y, crop, density, seed, partial,
+                                    earlyRefinements, pass.animationPriority, passDeadline));
+                    items = SourceClient.merge(items, loaded);
+                    if (pass.animationPriority) animationPool += loaded.length();
+                    if (debug) searchPasses.put(new JSONObject().put("phase", pass.name())
+                            .put("candidates", loaded.length()).put("elapsedMs", android.os.SystemClock.elapsedRealtime() - started));
+                    // An unlabelled selection can still be a photo. Compare the extra animations in a mixed pass.
+                    if (pass == SourceLookupPlan.Pass.COMMENT_ANIMATIONS) {
+                        comparisonPending = loaded.length() > 0;
+                        continue;
+                    }
+                    hits = refine(c,client,screen,x,y,crop,scope,Matcher.find(screen,x,y,crop,density,items),deadline);
+                    comparisonPending = false;
+                    if (!hits.isEmpty()) fast = pass.canFinish(hits.get(0).score, runnerUp(hits));
                 }
-                if(!fast&&android.os.SystemClock.elapsedRealtime()<deadline){loaded=client.sourceIndex(c,16,sourceScope,aspect,deadline,5,16,motionRequired,scanned);items=SourceClient.merge(items,loaded);hits=refine(c,client,screen,x,y,crop,scope,Matcher.find(screen,x,y,crop,density,items),deadline);fast=confident(hits,.045,.03);}
-                if(!fast&&android.os.SystemClock.elapsedRealtime()<deadline){loaded=client.sourceIndex(c,64,sourceScope,aspect,deadline,12,20,motionRequired,scanned);items=SourceClient.merge(items,loaded);hits=refine(c,client,screen,x,y,crop,scope,Matcher.find(screen,x,y,crop,density,items),deadline);fast=confident(hits,.075,.025);}
-                if(!fast&&android.os.SystemClock.elapsedRealtime()<deadline){loaded=client.sourceIndex(c,2400,scope.equals("im")?"all":"comments",aspect,deadline,20,32,motionRequired,scanned);items=SourceClient.merge(items,loaded);hits=refine(c,client,screen,x,y,crop,scope,Matcher.find(screen,x,y,crop,density,items),deadline);}
+                // The deadline can expire before the next pass, but loaded candidates still need a final comparison.
+                if (comparisonPending) hits = Matcher.find(screen, x, y, crop, density, items);
             }
-            if(Diagnostics.debug(c)){
-                JSONObject report=new JSONObject().put("selectionId",selectionId).put("selectedBounds",crop.flattenToString()).put("scope",scope).put("fastPath",fast).put("knownSourcePool",known.length()).put("knownSourceResolved",cached).put("animationPool",animationPool).put("lookupBudgetMs",LOOKUP_BUDGET_MS).put("lookupElapsedMs",android.os.SystemClock.elapsedRealtime()-lookupStarted);JSONArray scores=new JSONArray();for(int i=0;i<Math.min(3,hits.size());i++){JSONObject m=new JSONObject(hits.get(i).media.toString());m.remove("thumbs");m.put("sourceScore",hits.get(i).score);scores.put(m);}report.put("sources",scores);
+            if(debug){
+                JSONObject report=new JSONObject().put("selectionId",selectionId).put("selectedBounds",crop.flattenToString()).put("scope",scope).put("fastPath",fast).put("knownSourcePool",known.length()).put("knownSourceResolved",cached).put("animationPool",animationPool).put("lookupBudgetMs",LOOKUP_BUDGET_MS).put("lookupElapsedMs",android.os.SystemClock.elapsedRealtime()-lookupStarted).put("searchPasses",searchPasses);JSONArray scores=new JSONArray();for(int i=0;i<Math.min(3,hits.size());i++){JSONObject m=new JSONObject(hits.get(i).media.toString());m.remove("thumbs");m.put("sourceScore",hits.get(i).score);scores.put(m);}report.put("sources",scores);
                 Files.write(new File(c.getFilesDir(),"source-resolution.json").toPath(),report.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             }
             if(!confident(hits,.105,.02)){
@@ -87,11 +112,14 @@ public final class Jobs {
             convert(c,source,selected.media.getString("path"),"screen_selection",selectionId,selection,selected.media,sourceHash);client.remember(c,selected.media);
         }catch(OutOfMemoryError e){State.cancelSelection(selectionId);lowMemory(c);}catch(Exception e){State.cancelSelection(selectionId);fail(c,e);}finally{if(!screen.isRecycled())screen.recycle();if(source!=null)source.delete();}});
     }
-    private static boolean confident(List<Matcher.Hit> hits,double threshold,double gap){return !hits.isEmpty()&&hits.get(0).score<threshold&&(hits.size()==1||hits.get(1).score-hits.get(0).score>gap);}
-    private static boolean matchAnimationBatch(Context c,SourceClient client,Bitmap screen,int x,int y,Rect bounds,float density,JSONArray known,JSONArray batch,Set<String> attempted,long deadline)throws Exception{
+    private static double runnerUp(List<Matcher.Hit> hits) {
+        return hits.size() > 1 ? hits.get(1).score : Double.POSITIVE_INFINITY;
+    }
+    private static boolean confident(List<Matcher.Hit> hits,double threshold,double gap){return !hits.isEmpty()&&SourceLookupPlan.confident(hits.get(0).score,runnerUp(hits),threshold,gap);}
+    private static boolean matchLookupBatch(Context c,SourceClient client,Bitmap screen,int x,int y,Rect bounds,float density,JSONArray known,JSONArray batch,Set<String> attempted,boolean refineAnimation,long deadline)throws Exception{
         List<Matcher.Hit> hits=Matcher.find(screen,x,y,bounds,density,SourceClient.merge(known,batch));
         if(confident(hits,.045,.03))return true;
-        if(batch.length()<16||attempted.size()>=2||android.os.SystemClock.elapsedRealtime()>=deadline||!confident(hits,.15,.025))return false;
+        if(!refineAnimation||batch.length()<16||attempted.size()>=2||android.os.SystemClock.elapsedRealtime()>=deadline||!confident(hits,.15,.025))return false;
         JSONObject best=hits.get(0).media;String path=best.getString("path");
         if(!SourceClient.needsRefine(best)||attempted.contains(path))return false;
         for(int index=0;index<batch.length();index++)if(batch.getJSONObject(index).getString("path").equals(path)){

@@ -18,7 +18,6 @@ import org.json.JSONObject;
 /** Indexes originals for background resolution and optional manual file selection. */
 public final class SourceClient {
     public static final int PORT=47381;
-    private static final String INDEX_DIRECTORY="media_index_v4";
     private final String token;
     public SourceClient(Context c){token=State.token(c);}
     private static int timeout(long deadline,int maximum)throws SocketTimeoutException{
@@ -53,23 +52,71 @@ public final class SourceClient {
     private static String hash(byte[] data)throws Exception{return hex(java.security.MessageDigest.getInstance("SHA-256").digest(data));}
     private static String identity(JSONObject media)throws Exception{return media.getString("path")+":"+media.optLong("modified")+":"+media.optLong("size");}
     private File metadataFile(Context c,JSONObject media)throws Exception{
-        File dir=new File(c.getCacheDir(),INDEX_DIRECTORY);return metadataFile(dir,identity(media));
+        return metadataFile(new SourceIndexFiles(c.getCacheDir()).writeDirectory(),identity(media));
     }
     private File metadataFile(File dir,String key)throws Exception{if(!dir.isDirectory())dir.mkdirs();return new File(dir,hash(key.getBytes(StandardCharsets.UTF_8))+".json");}
+    private static JSONObject readCached(SourceIndexFiles index, File file) {
+        if (file == null || !file.isFile() || file.length() >= 2000000) return null;
+        try {
+            JSONObject media = new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+            if (media.optBoolean("unreadable") || !index.accepts(file, containerKind(media))) return null;
+            return media;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+    private static String containerKind(JSONObject media) {
+        return media.optString("containerKind", media.optString("kind"));
+    }
+    private static boolean hasFingerprints(JSONObject media) {
+        if (media == null || media.optString("sha256").isEmpty()) return false;
+        JSONArray thumbs = media.optJSONArray("thumbs");
+        return thumbs != null && thumbs.length() > 0;
+    }
+    private static boolean compatibleFingerprints(JSONObject current, JSONObject previous) {
+        if (!hasFingerprints(previous)) return false;
+        String currentHash = current == null ? "" : current.optString("sha256");
+        return currentHash.isEmpty() || currentHash.equals(previous.optString("sha256"));
+    }
+    private static JSONObject readMatching(SourceIndexFiles index, File file, String container) {
+        JSONObject current = readCached(index, file);
+        boolean currentMatches = current != null && container.equals(containerKind(current));
+        if (currentMatches && hasFingerprints(current)) return current;
+        JSONObject previous = readCached(index, index.previousVersion(file));
+        if (compatibleFingerprints(current, previous) && container.equals(containerKind(previous))) return previous;
+        return currentMatches && !current.optString("sha256").isEmpty() ? current : null;
+    }
     public JSONArray known(Context c,String scope,float aspect)throws Exception{
-        File dir=new File(c.getCacheDir(),INDEX_DIRECTORY);File[] files=dir.listFiles((d,name)->name.endsWith(".json"));JSONArray result=new JSONArray();if(files==null)return result;
-        java.util.HashMap<File,Long> times=new java.util.HashMap<>();for(File file:files)times.put(file,file.lastModified());java.util.Arrays.sort(files,(a,b)->Long.compare(times.get(b),times.get(a)));
+        SourceIndexFiles index = new SourceIndexFiles(c.getCacheDir());
+        java.util.List<File> files = index.newestRecords();
+        JSONArray result = new JSONArray();
         java.util.LinkedHashMap<String,JSONObject> paths=new java.util.LinkedHashMap<>();String last=State.last.optString("source");long retainedBytes=0;
         long readBytes=0,started=android.os.SystemClock.elapsedRealtime();
-        for(int i=0;i<Math.min(128,files.length)&&readBytes<12L*1024*1024&&android.os.SystemClock.elapsedRealtime()-started<300;i++)try{
-            if(files[i].length()>2000000)continue;JSONObject media=new JSONObject(new String(java.nio.file.Files.readAllBytes(files[i].toPath()),StandardCharsets.UTF_8));String path=media.optString("path");
-            readBytes+=files[i].length();
-            if(!media.has("thumbs")||media.optString("sha256").isEmpty())continue;
+        for(int i=0;i<Math.min(128,files.size())&&readBytes<12L*1024*1024&&android.os.SystemClock.elapsedRealtime()-started<300;i++)try{
+            File file = files.get(i);
+            long bytes = file.length();
+            JSONObject media = null;
+            if (bytes > 0 && bytes < 2000000 && readBytes + bytes <= 12L * 1024 * 1024) {
+                readBytes += bytes;
+                media = readCached(index, file);
+            }
+            if (!hasFingerprints(media)) {
+                File fallback = index.previousVersion(file);
+                if (fallback == null) continue;
+                bytes = fallback.length();
+                if (bytes <= 0 || bytes >= 2000000 || readBytes + bytes > 12L * 1024 * 1024
+                        || android.os.SystemClock.elapsedRealtime() - started >= 300) continue;
+                readBytes += bytes;
+                JSONObject previous = readCached(index, fallback);
+                if (!compatibleFingerprints(media, previous)) continue;
+                media = previous;
+            }
+            String path = media.optString("path");
             if(!path.contains("/Android/data/com.ss.android.ugc.aweme/cache/")||(scope.equals("im")&&!path.contains("/im_fresco_cache/")))continue;
             if(scope.equals("comments")&&path.contains("/im_fresco_cache/"))continue;
             if(aspect>0&&Math.abs(Math.log(((float)media.optInt("width",1)/Math.max(1,media.optInt("height",1)))/aspect))>.5)continue;
             media.put("knownSource",true).put("recentlyUsed",path.equals(last)||media.optLong("usedAt")>System.currentTimeMillis()-3600000);
-            media.put("_indexBytes",files[i].length());JSONObject previous=paths.get(path);if(previous==null){if(paths.size()>=128||retainedBytes+files[i].length()>8L*1024*1024)continue;retainedBytes+=files[i].length();paths.put(path,media);}else if(previous.optJSONArray("thumbs").length()<media.getJSONArray("thumbs").length()){long updated=retainedBytes-previous.optLong("_indexBytes")+files[i].length();if(updated<=8L*1024*1024){retainedBytes=updated;paths.put(path,media);}}
+            media.put("_indexBytes",bytes);JSONObject previous=paths.get(path);if(previous==null){if(paths.size()>=128||retainedBytes+bytes>8L*1024*1024)continue;retainedBytes+=bytes;paths.put(path,media);}else if(previous.optJSONArray("thumbs").length()<media.getJSONArray("thumbs").length()){long updated=retainedBytes-previous.optLong("_indexBytes")+bytes;if(updated<=8L*1024*1024){retainedBytes=updated;paths.put(path,media);}}
         }catch(Exception ignored){}
         java.util.HashSet<String> hashes=new java.util.HashSet<>();for(JSONObject media:paths.values())if(hashes.add(media.optString("sha256"))){media.remove("_indexBytes");result.put(media);}return result;
     }
@@ -80,33 +127,35 @@ public final class SourceClient {
     }
     public void remember(Context c,JSONObject media){try{JSONObject item=new JSONObject(media.toString()).put("usedAt",System.currentTimeMillis());java.nio.file.Files.write(metadataFile(c,item).toPath(),item.toString().getBytes(StandardCharsets.UTF_8));}catch(Exception ignored){}}
     public static boolean needsRefine(JSONObject media){return media.optBoolean("animated")&&media.optInt("fingerprintVersion")<2;}
-    public void forget(Context c,String path){File[] files=new File(c.getCacheDir(),INDEX_DIRECTORY).listFiles((dir,name)->name.endsWith(".json"));if(files==null)return;for(File file:files)try{if(file.length()<2000000&&new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8)).optString("path").equals(path))file.delete();}catch(Exception ignored){}}
-    public interface IndexObserver { boolean sufficient(JSONArray items)throws Exception; }
-    public JSONArray sourceIndex(Context c,int limit,String scope,float aspect,long deadline,int from,int to,boolean animatedOnly,Set<String> scanned)throws Exception{
-        return sourceIndex(c,limit,scope,aspect,deadline,from,to,animatedOnly,scanned,null);
+    public void forget(Context c,String path){
+        SourceIndexFiles index = new SourceIndexFiles(c.getCacheDir());
+        for (File file : index.allRecords()) {
+            JSONObject cached = readCached(index, file);
+            if (cached != null && path.equals(cached.optString("path"))) file.delete();
+        }
     }
+    public interface IndexObserver { boolean sufficient(JSONArray items)throws Exception; }
     public JSONArray sourceIndex(Context c,int limit,String scope,float aspect,long deadline,int from,int to,boolean animatedOnly,Set<String> scanned,IndexObserver observer)throws Exception{
         JSONArray raw,result=new JSONArray();Set<String> seen=new HashSet<>();
         try{raw=call(new JSONObject().put("op","index").put("limit",limit).put("scope",scope).put("animatedOnly",animatedOnly),deadline).getJSONArray("items");}
         catch(SocketTimeoutException error){if(SystemClock.elapsedRealtime()>=deadline)return result;throw error;}
-        File dir=new File(c.getCacheDir(),INDEX_DIRECTORY);
+        SourceIndexFiles index = new SourceIndexFiles(c.getCacheDir());
+        File dir = index.writeDirectory();
         for(int i=0;i<raw.length()&&SystemClock.elapsedRealtime()<deadline;i++){
             if(i%12==0)State.phaseProgress(from,to,i,raw.length());
             JSONObject entry=raw.getJSONObject(i);String key=identity(entry);if(scanned.contains(key))continue;
             File source=null,metadata=metadataFile(dir,key);
             try{
-                JSONObject media=null;
-                if(metadata.isFile()&&metadata.length()<2000000)try{media=new JSONObject(new String(java.nio.file.Files.readAllBytes(metadata.toPath()),StandardCharsets.UTF_8));}catch(Exception ignored){}
-                if(media!=null&&(media.optBoolean("unreadable")||!media.optString("containerKind",media.optString("kind")).equals(entry.optString("kind"))))media=null;
+                JSONObject media = readMatching(index, metadata, entry.optString("kind"));
                 boolean write=media==null;
                 if(media==null){source=fetch(c,entry.getString("path"),deadline);media=MediaFiles.describe(source,true);media.put("path",entry.getString("path")).put("modified",entry.optLong("modified")).put("sha256",Jobs.sha256(source));}
                 media.put("size",entry.optLong("size")).put("containerKind",entry.optString("kind"));
                 if(write)java.nio.file.Files.write(metadata.toPath(),media.toString().getBytes(StandardCharsets.UTF_8));
                 if(animatedOnly&&!media.optBoolean("animated"))continue;
                 if(aspect>0&&Math.abs(Math.log(((float)media.optInt("width",1)/Math.max(1,media.optInt("height",1)))/aspect))>.5){scanned.add(key);continue;}
-                if(!media.has("thumbs")){if(source==null)source=fetch(c,entry.getString("path"),deadline);JSONObject pictured=MediaFiles.describe(source,true);media.put("thumbs",pictured.getJSONArray("thumbs"));if(pictured.optBoolean("animated"))media.put("animated",true);java.nio.file.Files.write(metadata.toPath(),media.toString().getBytes(StandardCharsets.UTF_8));}
+                if(!hasFingerprints(media)){if(source==null)source=fetch(c,entry.getString("path"),deadline);JSONObject pictured=MediaFiles.describe(source,true);media.put("thumbs",pictured.getJSONArray("thumbs"));if(pictured.optBoolean("animated"))media.put("animated",true);java.nio.file.Files.write(metadata.toPath(),media.toString().getBytes(StandardCharsets.UTF_8));}
                 scanned.add(key);
-                if(seen.add(media.optString("sha256",entry.getString("path")))){result.put(media);if(observer!=null&&result.length()%8==0&&observer.sufficient(result))break;}
+                if(seen.add(media.optString("sha256",entry.getString("path")))){result.put(media);if(observer!=null&&SourceLookupPlan.checkpoint(result.length())&&observer.sufficient(result))break;}
             }catch(Exception ignored){}finally{if(source!=null)source.delete();}
         }return result;
     }
@@ -119,17 +168,15 @@ public final class SourceClient {
         JSONObject animatedIndex=call(new JSONObject().put("op","index").put("limit",limit).put("animatedOnly",true));
         JSONArray raw=new JSONArray(),items=new JSONArray();java.util.HashSet<String> paths=new java.util.HashSet<>(),seen=new java.util.HashSet<>();
         for(JSONArray group:new JSONArray[]{animatedIndex.getJSONArray("items"),index.getJSONArray("items")})for(int i=0;i<group.length();i++){JSONObject entry=group.getJSONObject(i);if(paths.add(entry.getString("path")))raw.put(entry);}
-        File cache=new File(c.getCacheDir(),INDEX_DIRECTORY);cache.mkdirs();
+        SourceIndexFiles cache = new SourceIndexFiles(c.getCacheDir());
         for(int i=0;i<raw.length();i++){
             if(i%6==0)State.phaseProgress(0,90,i,raw.length());
             JSONObject entry=raw.getJSONObject(i);String path=entry.getString("path"),key=path+":"+entry.optLong("modified")+":"+entry.optLong("size");
-            File metadata=new File(cache,hash(key.getBytes(StandardCharsets.UTF_8))+".json"),source=null;
+            File metadata=metadataFile(cache.writeDirectory(),key),source=null;
             try{
-                JSONObject media=null;
-                if(metadata.isFile()&&metadata.length()<2000000)try{media=new JSONObject(new String(java.nio.file.Files.readAllBytes(metadata.toPath()),StandardCharsets.UTF_8));}catch(Exception ignored){}
-                if(media!=null&&(media.optBoolean("unreadable")||!media.optString("containerKind",media.optString("kind")).equals(entry.optString("kind"))))media=null;
-                if(media==null||!media.has("thumbs")){
-                    source=fetch(c,path);media=MediaFiles.describe(source,true);media.put("path",path).put("modified",entry.optLong("modified")).put("sha256",Jobs.sha256(source));
+                JSONObject media = readMatching(cache, metadata, entry.optString("kind"));
+                if(!hasFingerprints(media)){
+                    source=fetch(c,path);media=MediaFiles.describe(source,true);media.put("path",path).put("modified",entry.optLong("modified")).put("sha256",Jobs.sha256(source)).put("size",entry.optLong("size")).put("containerKind",entry.optString("kind"));
                     java.nio.file.Files.write(metadata.toPath(),media.toString().getBytes(StandardCharsets.UTF_8));
                 }
                 if(media.optInt("width")<64||media.optInt("height")<64)continue;

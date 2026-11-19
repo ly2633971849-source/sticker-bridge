@@ -86,6 +86,13 @@ public final class BridgeAccessibility extends AccessibilityService {
         if(!attached||locked()||(!State.busy&&now>=until)){removeStatus();return;}
         if(capturePending){if(progressAttached)progress.setVisibility(View.INVISIBLE);return;}
         if(picker!=null&&picker.expanded){if(progressAttached)progress.setVisibility(View.INVISIBLE);State.MAIN.postDelayed(statusRefresh,200);return;}
+        boolean busy = State.busy;
+        boolean hasHint = now < State.hintUntil;
+        ProgressPresentation display = ProgressPresentation.of(State.stage, busy,
+                State.savedResult && now < State.noticeUntil, Diagnostics.countedProgressPhase(),
+                State.progress, now - State.jobStartedElapsed);
+        String title = !busy && hasHint ? "表情直达" : display.title;
+        String detail = hasHint ? State.hint : State.detail;
         try{
             if(progress==null){
                 progress=new TextView(this);progress.setTextColor(0xffc3f7d9);progress.setTextSize(13);progress.setMaxLines(4);progress.setEllipsize(android.text.TextUtils.TruncateAt.END);progress.setPadding(dp(16),dp(12),dp(16),dp(12));progress.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
@@ -95,10 +102,8 @@ public final class BridgeAccessibility extends AccessibilityService {
             if(!progressAttached){
                 WindowManager.LayoutParams layout=new WindowManager.LayoutParams(getResources().getDisplayMetrics().widthPixels-dp(32),WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,PixelFormat.TRANSLUCENT);layout.gravity=Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL;layout.y=dp(36);layout.setTitle("表情直达保存状态");windows.addView(progress,layout);progressAttached=true;
             }
-            String title=(!State.busy&&now<State.hintUntil)?"表情直达":State.stage;
-            if(State.busy||(State.savedResult&&now<State.noticeUntil&&now>=State.hintUntil)){if(State.progress>=0&&!State.lookingForOriginal)title+="  "+Math.min(100,State.progress)+"%";else{long seconds=(now-State.jobStartedElapsed)/1000;if(seconds>=3)title+=" · 已用 "+seconds+" 秒";}}
-            String detail=now<State.hintUntil?State.hint:State.detail;String text=title+"\n"+detail;if(!text.contentEquals(progress.getText()))progress.setText(text);progress.setVisibility(View.VISIBLE);
-        }catch(RuntimeException error){statusWindowErrors++;lastStatusError=error.toString();removeStatus();if(fallbackJob!=State.jobId){fallbackJob=State.jobId;android.widget.Toast.makeText(this,State.stage+"："+State.detail,android.widget.Toast.LENGTH_LONG).show();}}
+            String text=title+"\n"+detail;if(!text.contentEquals(progress.getText()))progress.setText(text);progress.setVisibility(View.VISIBLE);
+        }catch(RuntimeException error){statusWindowErrors++;lastStatusError=error.toString();removeStatus();if(fallbackJob!=State.jobId){fallbackJob=State.jobId;android.widget.Toast.makeText(this,title+"\n"+detail,android.widget.Toast.LENGTH_LONG).show();}}
         State.MAIN.postDelayed(statusRefresh,State.busy?250:Math.max(50,Math.min(1000,until-now)));
     }
     public AccessibilityNodeInfo primaryRoot(){List<AccessibilityWindowInfo> list=getWindowsOnAllDisplays().get(0);AccessibilityNodeInfo fallback=null;int layer=-1;if(list!=null){for(AccessibilityWindowInfo w:list)if(w.getType()==AccessibilityWindowInfo.TYPE_APPLICATION){AccessibilityNodeInfo r=w.getRoot();if(r==null)continue;if(w.isActive()||w.isFocused())return r;if(w.getLayer()>layer){fallback=r;layer=w.getLayer();}}}return fallback!=null?fallback:getRootInActiveWindow();}

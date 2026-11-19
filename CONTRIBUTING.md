@@ -6,12 +6,15 @@
 | --- | --- |
 | 首页、系统选文件、系统分享入口 | `MainActivity.java` |
 | 悬浮按钮、目标边界及画面识别 | `BridgeAccessibility.java`、`SelectionTargets.java`、`PreviewGeometry.java`、`MotionBadge.java` |
+| 原件候选和索引兼容性 | `SourceClient.java`、`SourceIndexFiles.java` |
 | 素材读取、转换、缓存和相册发布 | `Jobs.java`、`MediaFiles.java`、`ConversionCache.java` |
 | 视频帧、WebP 和 GIF | `VideoFrames.java`、`WebpAnimation.java`、`GifWriter.java`、`GifInfo.java` |
 | 更新检查、校验、安装 | `AppUpdates.java`、`UpdateFileProvider.java` |
 | 可公开的诊断摘要 | `Diagnostics.java` |
 
 源码位于 `app/src/main/java/com/stickerbridge/app/`。变更 Java 逻辑至少重新构建；转换改动跑 GIF 主机测试，并用能触发错误的最小素材在 Android 上验证。界面和相册行为需要手机或模拟器，主机测试无法替代。不要用已存在的相册文件证明这次保存成功，检查有无新增结果。
+
+变更文件判型或原件索引时，说明哪些旧记录还能复用、哪些需要重建。用相同素材对照旧版与候选版，同时记录覆盖升级和全新安装的结果。发布记录附测试用例和 Git 提交号，保留升级后查找耗时以便定位性能回退。
 
 ## 发布检查
 

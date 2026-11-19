@@ -65,7 +65,7 @@ public final class MainActivity extends Activity {
         refresh();
         if (animation != null) animation.start();
         checkConnection();
-        State.MAIN.postDelayed(stateListener, 350);
+        if (!State.busy) State.MAIN.postDelayed(stateListener, 350);
     }
 
     @Override protected void onPause() {
@@ -253,15 +253,16 @@ public final class MainActivity extends Activity {
     }
 
     private void showPreparation() {
-        boolean phoneOnly = State.prefs(this).getBoolean("force_single_frame", false);
-        String current = !phoneOnly && helper ? "原件桥已连接，框选优先查找原件。"
-                : "手机模式可直接框选保存静态 PNG，也可导入原文件转 GIF。";
+        boolean staticCapture = State.prefs(this).getBoolean("force_single_frame", false);
+        String current = staticCapture ? "当前为静态截图模式，框选普通图片时保存当前画面为一帧 PNG。"
+                : helper ? "当前为原件优先，原件助手已连接。"
+                : "当前为原件优先，原件助手未连接时，框选会提示如何导入文件。";
         new AlertDialog.Builder(this)
                 .setTitle("保存方式")
-                .setMessage(current + "\n\n框选需要开启系统无障碍。静态框选保存选区当前画面，不用电脑。"
-                        + "\n\n要保留动画，请将抖音能保存或分享的原文件导入表情直达。")
-                .setPositiveButton(phoneOnly ? "恢复自动选择" : "仅用手机模式", (dialog, which) -> {
-                    State.prefs(this).edit().putBoolean("force_single_frame", !phoneOnly).apply();
+                .setMessage(current + "\n\n框选需要开启系统无障碍。"
+                        + "\n\n手机已有完整动图或视频时，点「更多 → 导入图片或视频」即可生成 GIF，无需原件助手。")
+                .setPositiveButton(staticCapture ? "切换到原件优先" : "仅保存静态截图", (dialog, which) -> {
+                    State.prefs(this).edit().putBoolean("force_single_frame", !staticCapture).apply();
                     updateStatus();
                 })
                 .setNeutralButton("导入文件", (dialog, which) -> pickFile())
@@ -284,10 +285,10 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("怎么保存表情")
                 .setMessage("1. 点首页按钮，在系统无障碍设置中开启“表情直达 · 框选保存”。"
-                        + "\n\n2. 打开抖音，找到评论图片、动图或小视频。点绿色“选”，再点目标；也可以把按钮拖到目标内松手，边框会自动贴合并保存。"
+                        + "\n\n2. 打开抖音，找到评论图片、动图或小视频。点绿色“选”，再点目标；也可以把按钮拖到目标内松手，边框会自动贴合。"
                         + "\n\n3. 保存完成后，打开 QQ 收藏，从最近照片添加。"
                         + "\n\n按钮不见了\n绿色“选”在本应用内不显示。打开抖音后仍未出现时，点“更多 → 恢复悬浮按钮”，再返回抖音。仍无法使用时，在系统无障碍设置中找到“表情直达 · 框选保存”，关闭再开启。不同手机的菜单名称可能不同。"
-                        + "\n\n不用电脑\n开启无障碍后可直接把选区画面存为静态 PNG。要保留动画，请导入能分享或保存的原文件。"
+                        + "\n\n原件与截图\n默认框选查找原件，原件助手未连接时会提示。只需要当前画面时，点首页「保存方式 → 仅保存静态截图」。手机已有完整动图或视频时，点「更多 → 导入图片或视频」生成 GIF。"
                         + "\n\n支持范围\n评论图片和静态表情保存为 PNG；动图、短视频和有完整片段的实况照片转为 GIF。原文件最大 32 MB，其中动态 WebP 最大 12 MB。重新生成的动画最长 60 秒，原文件必须完整且可读。视频的声音不写入 GIF。"
                         + "\n\n保存位置\n手机相册的 StickerBridge 文件夹。")
                 .setPositiveButton("知道了", null)
@@ -488,8 +489,8 @@ public final class MainActivity extends Activity {
         else setText(primaryHint, enabled ? "打开抖音后，点绿色“选”再点目标；也可拖到目标内松手。"
                 : "点击上方按钮，打开抖音后会显示绿色“选”。");
 
-        boolean originals = helper && !State.prefs(this).getBoolean("force_single_frame", false);
-        setText(preparation, originals ? "原件优先 · 保存方式  ›" : "无需电脑 · 保存方式  ›");
+        boolean staticCapture = State.prefs(this).getBoolean("force_single_frame", false);
+        setText(preparation, staticCapture ? "静态截图 · 保存方式  ›" : "原件优先 · 保存方式  ›");
         preparation.setTextColor(MUTED);
         available(primary, !busy);
         available(more, !busy);
@@ -502,19 +503,23 @@ public final class MainActivity extends Activity {
                 && (State.jobId != 0 || !"准备好保存到相册".equals(State.stage)))
                 || (State.savedResult && !hasLast);
         taskCard.setVisibility(hasMessage ? View.VISIBLE : View.GONE);
-        setText(status, State.stage + ((busy || State.savedResult) && State.progress >= 0 && !State.lookingForOriginal
-                ? "  " + State.progress + "%" : ""));
+        ProgressPresentation display = ProgressPresentation.of(State.stage, busy, State.savedResult,
+                Diagnostics.countedProgressPhase(), State.progress,
+                android.os.SystemClock.elapsedRealtime() - State.jobStartedElapsed);
+        setText(status, display.title);
         setText(detail, State.detail);
         progress.setVisibility(busy ? View.VISIBLE : View.GONE);
-        progress.setIndeterminate(State.progress < 0 || State.lookingForOriginal);
-        if (State.progress >= 0) progress.setProgress(State.progress);
+        progress.setIndeterminate(display.indeterminate);
+        if (display.percent >= 0) progress.setProgress(display.percent);
+        State.MAIN.removeCallbacks(stateListener);
+        if (resumed && display.indeterminate) State.MAIN.postDelayed(stateListener, 350);
 
         lastCard.setVisibility(hasLast ? View.VISIBLE : View.GONE);
         bindLast(last);
         setText(lastTitle, State.savedResult ? "已保存到相册" : "上次保存的表情");
         setText(lastFormat, (last.optInt("frames") > 1 ? "动态表情"
                 : "selection_frame".equals(last.optString("inputMethod")) ? "静态截图" : "静态表情")
-                + (State.savedResult && State.progress == 100 ? " · 100%" : ""));
+                + (display.percent == 100 ? " · 100%" : ""));
     }
 
     private void refresh() {
